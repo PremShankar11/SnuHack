@@ -45,10 +45,12 @@ app.add_middleware(
 from api.simulation_router import router as sim_router
 from api.dashboard_router import router as dash_router
 from api.quant_routes import router as quant_router
-app.include_router(ingest_router, tags=["Ingestion"])
+
+# Register routers - Quant Engine takes precedence for /api/dashboard
+app.include_router(quant_router, prefix="/quant", tags=["Quant Engine (Stream 2)"])
+app.include_router(ingest_router, tags=["Ingestion (Stream 1)"])
 app.include_router(sim_router, tags=["Simulation Engine"])
-app.include_router(dash_router, tags=["Dashboard & UI (Legacy)"])
-app.include_router(quant_router, prefix="/quant", tags=["Quant Engine"])
+app.include_router(dash_router, tags=["Legacy UI Endpoints"])
 
 @app.get("/")
 def read_root():

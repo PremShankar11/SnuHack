@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useSimulation } from "../context/SimulationContext";
 import { Upload, CheckCircle2, Link2, AlertCircle, Wifi } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { API_URL } from "../lib/api";
 
 type LedgerItem = {
   id: string;
@@ -27,7 +28,7 @@ export default function IngestionPage() {
   useEffect(() => {
     async function fetchTransactions() {
       try {
-        const res = await fetch("http://localhost:8000/api/transactions");
+        const res = await fetch(`${API_URL}/api/transactions`);
         if (res.ok) {
           const data = await res.json();
           setLedgerItems(data.items);
@@ -46,7 +47,7 @@ export default function IngestionPage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await fetch("http://localhost:8000/api/ingest/receipt", {
+      const res = await fetch(`${API_URL}/api/ingest/receipt`, {
         method: "POST",
         body: formData,
       });

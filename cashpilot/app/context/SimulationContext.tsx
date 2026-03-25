@@ -11,6 +11,8 @@ type SimulationContextType = {
 
 const SimulationContext = createContext<SimulationContextType | undefined>(undefined);
 
+import { API_URL } from "../lib/api";
+
 export function SimulationProvider({ children }: { children: ReactNode }) {
   const [daysOffset, setDaysOffset] = useState(0);
   const [simulatedDate, setSimulatedDate] = useState<string>(() => {
@@ -24,7 +26,7 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
     setIsSimulating(true);
 
     try {
-      const res = await fetch("http://localhost:8000/api/simulate/advance", {
+      const res = await fetch(`${API_URL}/api/simulate/advance`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ days_offset: offset }),

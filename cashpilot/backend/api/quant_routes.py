@@ -123,7 +123,7 @@ def get_dashboard():
         cur = conn.cursor()
         cur.execute("SELECT current_simulated_date FROM companies LIMIT 1;")
         company = cur.fetchone()
-        simulated_as_of = company['current_simulated_date'].isoformat() if company else datetime.now().date().isoformat()
+        simulated_as_of = company['current_simulated_date'].isoformat() if company and company['current_simulated_date'] else datetime.now().date().isoformat()
         cur.close()
         conn.close()
         
@@ -139,14 +139,19 @@ def get_dashboard():
         # Build cashflow projection array (14 days)
         cashflow_projection = []
         current_balance = phantom_result['usable_cash']
-        base_date = datetime.fromisoformat(simulated_as_of).date() if isinstance(simulated_as_of, str) else simulated_as_of
+        
+        # Parse simulated_as_of to date object
+        if isinstance(simulated_as_of, str):
+            base_date = datetime.fromisoformat(simulated_as_of).date()
+        else:
+            base_date = simulated_as_of
         
         for i in range(14):
             projection_date = base_date + timedelta(days=i)
             # Calculate net obligations for this day
             day_obligations = sum(
                 float(ob['amount']) for ob in obligations
-                if ob['due_date'] == projection_date
+                if (ob['due_date'] if not isinstance(ob['due_date'], str) else datetime.fromisoformat(ob['due_date']).date()) == projection_date
             )
             current_balance += day_obligations
             

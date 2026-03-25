@@ -4,6 +4,7 @@ import { useSimulation } from "./context/SimulationContext";
 import { TrendingDown, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { ResponsiveContainer, AreaChart, Area, Tooltip, ReferenceLine } from "recharts";
+import { API_URL } from "./lib/api";
 
 function fmt(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -27,7 +28,7 @@ export default function DashboardPage() {
       setError(null);
       try {
         // Fetch from Quant Engine
-        const res = await fetch("http://localhost:8000/quant/api/dashboard");
+        const res = await fetch(`${API_URL}/quant/api/dashboard`);
         if (res.ok) {
           const json = await res.json();
           
