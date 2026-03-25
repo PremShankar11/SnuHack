@@ -1,29 +1,228 @@
-# Dependencies
+# ============================================================================
+# CONFIDENTIAL FILES - DO NOT COMMIT
+# ============================================================================
+
+# Environment variables (CRITICAL - Contains API keys, DB credentials)
+.env
+.env.*
+!.env.example
+cashpilot/.env
+cashpilot/.env.*
+backend/.env
+backend/.env.*
+
+# Database credentials and connection strings
+**/database.ini
+**/db_config.json
+**/credentials.json
+
+# API Keys and Secrets
+**/secrets.json
+**/api_keys.txt
+**/*_secret*
+**/*_key*
+**/*_token*
+
+# SSL/TLS Certificates and Private Keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ============================================================================
+# DEPENDENCIES
+# ============================================================================
+
+# Node.js
 node_modules/
 cashpilot/node_modules/
+package-lock.json
 
-# Python virtual environments
+# Python
 venv/
 .venv/
 env/
-
-# Environment variables (Crucial for security!)
-.env
-.env.local
-
-# Build outputs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg-info/
 dist/
 build/
+*.egg
 
-# Next.js build and cache
+# ============================================================================
+# BUILD OUTPUTS & CACHE
+# ============================================================================
+
+# Next.js
 .next/
 cashpilot/.next/
 out/
-
-# Turbopack cache
 .turbo/
 
-.next/
-node_modules/
-*.sst
+# Python
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# General build
+dist/
+build/
+*.so
+*.dylib
+*.dll
+
+# ============================================================================
+# IDE & EDITOR FILES
+# ============================================================================
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# ============================================================================
+# LOGS & TEMPORARY FILES
+# ============================================================================
+
+# Logs
 *.log
+logs/
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+.DS_Store
+Thumbs.db
+
+# Test outputs
+test_log.txt
+backend/test_log.txt
+
+# ============================================================================
+# DATABASE FILES (Local Development)
+# ============================================================================
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# PostgreSQL dumps
+*.sql.gz
+*.dump
+
+# ============================================================================
+# SENSITIVE DATA & TEST FILES
+# ============================================================================
+
+# Dummy/test data with real information
+**/dummy_receipt.jpg
+**/test_receipt.*
+**/sample_data.json
+
+# User uploaded files (may contain PII)
+uploads/
+user_data/
+receipts/
+
+# Financial data exports
+**/financial_export.*
+**/transaction_history.*
+**/bank_statements.*
+
+# ============================================================================
+# DEPLOYMENT & INFRASTRUCTURE
+# ============================================================================
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Docker
+docker-compose.override.yml
+
+# AWS
+.aws/
+
+# Serverless
+.serverless/
+*.sst
+
+# ============================================================================
+# DOCUMENTATION (Generated)
+# ============================================================================
+
+# Auto-generated docs
+docs/_build/
+site/
+
+# ============================================================================
+# OS SPECIFIC
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.directory
+
+# ============================================================================
+# SECURITY NOTES
+# ============================================================================
+# 
+# NEVER COMMIT:
+# - .env files (contain DATABASE_URL, API keys)
+# - Credentials or passwords
+# - Private keys or certificates
+# - User data or PII
+# - Financial records
+# - Test data with real information
+# 
+# ALWAYS USE:
+# - Environment variables for secrets
+# - .env.example for documentation (no real values)
+# - Encrypted storage for sensitive data
+# - Separate configs for dev/staging/prod
+# 
+# ============================================================================

@@ -1,0 +1,22 @@
+# CashPilot Backend Requirements
+
+# Web Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.0
+
+# Database
+psycopg2-binary==2.9.9
+
+# Scientific Computing (Quant Engine)
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.0
+
+# AI/ML (Ingestion Pipeline)
+google-generativeai==0.8.3
+rapidfuzz==3.10.0
+
+# Utilities
+python-dotenv==1.0.1
+python-multipart==0.0.12
