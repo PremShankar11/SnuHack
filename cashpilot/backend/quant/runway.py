@@ -27,7 +27,7 @@ def calculate_runway(balance: float, obligations: List[Dict[str, Any]]) -> Dict[
         }
     
     # Sort obligations by due_date
-    sorted_obs = sorted(obligations, key=lambda x: x['due_date'])
+    sorted_obs = sorted(obligations, key=lambda x: x['due_date'] if not isinstance(x['due_date'], str) else datetime.fromisoformat(x['due_date']).date())
     
     # Simulate daily balance
     current_balance = balance

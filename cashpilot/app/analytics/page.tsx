@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useSimulation } from "../context/SimulationContext";
 import { mockState } from "../mockState";
+import { API_URL } from "../lib/api";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid, Legend,
@@ -19,23 +20,44 @@ type AnalyticsData = {
 export default function AnalyticsPage() {
   const { refreshKey, isSimulating, simulatedDate } = useSimulation();
   const [data, setData] = useState<AnalyticsData | null>(null);
+  const [decisionData, setDecisionData] = useState<any>(null);
+  const [dashboardData, setDashboardData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function fetchAnalytics() {
+    async function fetchData() {
       try {
-        const res = await fetch("http://localhost:8000/api/analytics");
-        if (res.ok) {
-          const json = await res.json();
+        // Fetch all data from Quant Engine and legacy analytics
+        const [analyticsRes, decisionRes, dashboardRes] = await Promise.all([
+          fetch(`${API_URL}/api/analytics`),
+          fetch(`${API_URL}/quant/api/decision`),
+          fetch(`${API_URL}/quant/api/dashboard`),
+        ]);
+
+        if (analyticsRes.ok) {
+          const json = await analyticsRes.json();
           setData(json);
         }
+
+        if (decisionRes.ok) {
+          const decisionJson = await decisionRes.json();
+          setDecisionData(decisionJson.solver_directive);
+        }
+
+        if (dashboardRes.ok) {
+          const dashboardJson = await dashboardRes.json();
+          setDashboardData(dashboardJson.global_state);
+        }
       } catch (err) {
-        console.error("Failed to fetch analytics", err);
+        console.error("Failed to fetch analytics data", err);
+      } finally {
+        setLoading(false);
       }
     }
-    fetchAnalytics();
+    fetchData();
   }, [refreshKey]);
 
-  if (!data) {
+  if (loading || !data) {
     return (
       <div className="p-8 max-w-5xl mx-auto">
         <div className="mb-8">
@@ -54,39 +76,6 @@ export default function AnalyticsPage() {
   const { cashFlow, monteCarlo, vendors } = data;
   const radarData = vendors.map((v) => ({ vendor: v.name, score: v.goodwill }));
 
-  // Check if breach occurs
-  const hasLiquidityBreach = cashFlow.some(d => d.standard < 0 || d.phantom < 0);
-  const [decisionData, setDecisionData] = useState<any>(null);
-  const [dashboardData, setDashboardData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        // Fetch decision data from Quant Engine
-        const [decisionRes, dashboardRes] = await Promise.all([
-          fetch("http://localhost:8000/quant/api/decision"),
-          fetch("http://localhost:8000/quant/api/dashboard"),
-        ]);
-
-        if (decisionRes.ok) {
-          const decisionJson = await decisionRes.json();
-          setDecisionData(decisionJson.solver_directive);
-        }
-
-        if (dashboardRes.ok) {
-          const dashboardJson = await dashboardRes.json();
-          setDashboardData(dashboardJson.global_state);
-        }
-      } catch (err) {
-        console.error("Failed to fetch analytics data", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchData();
-  }, []);
-
   const survivalProb = dashboardData?.runway_metrics?.monte_carlo_survival_prob || 0;
   const breachAmount = decisionData?.breach_amount || 0;
   const hasLiquidityBreach = breachAmount < 0;
@@ -99,18 +88,16 @@ export default function AnalyticsPage() {
           Live from Supabase · Simulated as of {simulatedDate}
         </p>
         <p className="text-sm text-gray-400 mt-1">Math engine · LP Solver · Monte Carlo</p>
-        {!loading && (
-          <div className="mt-2 flex items-center gap-2">
-            <span className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-1 rounded-full font-medium">
-              Quant Engine Active
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-1 rounded-full font-medium">
+            Quant Engine Active
+          </span>
+          {hasLiquidityBreach && (
+            <span className="text-xs bg-red-50 border border-red-200 text-red-600 px-2 py-1 rounded-full font-medium">
+              Liquidity Breach: {breachAmount.toLocaleString("en-US", { style: "currency", currency: "USD" })}
             </span>
-            {hasLiquidityBreach && (
-              <span className="text-xs bg-red-50 border border-red-200 text-red-600 px-2 py-1 rounded-full font-medium">
-                Liquidity Breach: {breachAmount.toLocaleString("en-US", { style: "currency", currency: "USD" })}
-              </span>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Main dual-line chart */}
@@ -120,7 +107,7 @@ export default function AnalyticsPage() {
             <p className="text-sm font-semibold text-gray-800">30-Day Cash Projection</p>
             <p className="text-xs text-gray-400 mt-0.5">Standard vs. Phantom (Liquidity Breach visible)</p>
           </div>
-          {hasLiquidityBreach && (
+          {hasLiquidityBreach && breachAmount < 0 && (
             <span className="text-[10px] bg-red-50 border border-red-200 text-red-600 font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide">
               Liquidity Breach Detected
             </span>
@@ -212,7 +199,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* LP Optimizer Results */}
-      {decisionData && decisionData.optimization_result && decisionData.optimization_result.length > 0 && (
+      {decisionData?.optimization_result && decisionData.optimization_result.length > 0 && (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
           <div className="mb-4">
             <p className="text-sm font-semibold text-gray-800">LP Optimizer Results</p>

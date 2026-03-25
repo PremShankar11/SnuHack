@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useSimulation } from "../context/SimulationContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronRight, X, CheckCircle2, XCircle, Zap, Mail } from "lucide-react";
+import { API_URL } from "../lib/api";
 
 export type Action = {
   id: string;
@@ -27,7 +28,7 @@ export default function InboxPage() {
   useEffect(() => {
     async function fetchInbox() {
       try {
-        const res = await fetch("http://localhost:8000/api/inbox");
+        const res = await fetch(`${API_URL}/api/inbox`);
         if (res.ok) {
           const json = await res.json();
           const mapped = json.inbox.map((log: any) => ({

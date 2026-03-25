@@ -5,8 +5,8 @@ import json
 
 router = APIRouter()
 
-@router.get("/api/dashboard")
-def get_dashboard():
+@router.get("/api/dashboard/legacy")
+def get_dashboard_legacy():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Database connection failed")
