@@ -44,9 +44,11 @@ app.add_middleware(
 # Include Stream 1 & 2 Routers
 from api.simulation_router import router as sim_router
 from api.dashboard_router import router as dash_router
+from api.quant_router import router as quant_router
 app.include_router(ingest_router, tags=["Ingestion"])
 app.include_router(sim_router, tags=["Simulation Engine"])
 app.include_router(dash_router, tags=["Dashboard & UI"])
+app.include_router(quant_router, tags=["Quant Engine"])
 
 @app.get("/")
 def read_root():

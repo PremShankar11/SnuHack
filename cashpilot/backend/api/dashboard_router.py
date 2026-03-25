@@ -1,6 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
 from core.db import get_db_connection
+from quant.runway_engine import calculate_runway
+from quant.phantom_balance import calculate_phantom_balance
+from quant.optimizer import optimize_payment_strategy
 import json
 
 router = APIRouter()
@@ -13,32 +16,23 @@ def get_dashboard():
         
     cur = conn.cursor()
     try:
-        cur.execute("SELECT id, plaid_current_balance, current_simulated_date FROM companies LIMIT 1;")
+        cur.execute("SELECT id FROM companies LIMIT 1;")
         company = cur.fetchone()
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
-            
-        simulated_now = company['current_simulated_date']
-        current_balance = float(company['plaid_current_balance'])
-        
-        # Phantom Usable: current balance + net of pending obligations in next 7 days
-        horizon = simulated_now + timedelta(days=7)
-        cur.execute(
-            "SELECT COALESCE(SUM(amount), 0) as net_pending FROM obligations WHERE status = 'PENDING' AND due_date <= %s;",
-            (horizon,)
-        )
-        net_pending = float(cur.fetchone()['net_pending'])
-        phantom_usable = current_balance + net_pending
-        
-        # Days to zero: based on upcoming payables burn rate
-        cur.execute(
-            "SELECT COALESCE(SUM(amount), 0) as burn FROM obligations WHERE status = 'PENDING' AND amount < 0 AND due_date <= %s;",
-            (simulated_now + timedelta(days=30),)
-        )
-        burn = abs(float(cur.fetchone()['burn']))
-        daily_burn = max(burn / 30.0, 1.0)
-        days_to_zero = max(0, int(current_balance / daily_burn))
-        
+
+        company_id = str(company['id'])
+
+        # Use quant modules for deterministic calculations
+        runway_data = calculate_runway(company_id)
+        phantom_data = calculate_phantom_balance(company_id)
+
+        # LP Optimizer — graceful fallback if it fails
+        try:
+            optimization_data = optimize_payment_strategy(company_id)
+        except Exception:
+            optimization_data = {"status": "UNAVAILABLE", "optimized_obligations": []}
+
         # Fetch urgent actions
         cur.execute("SELECT id, message as title, action_type as priority, status as subtitle FROM action_logs WHERE is_resolved = FALSE ORDER BY created_at DESC LIMIT 3;")
         actions_db = cur.fetchall()
@@ -47,18 +41,29 @@ def get_dashboard():
             priority = 'high'
             if 'URGENT' in a['title']: priority = 'critical'
             actions.append({"id": str(a['id']), "title": a['title'], "subtitle": a['subtitle'] or "Pending", "priority": priority})
-            
-        # Mock sparkline reflecting current phantom trajectory
-        sparkline = [{"day": str(simulated_now + timedelta(days=i)), "phantom": phantom_usable - (daily_burn * i)} for i in range(14)]
-        
+
+        # Count total unresolved actions for sidebar badge
+        cur.execute("SELECT COUNT(*) as cnt FROM action_logs WHERE is_resolved = FALSE;")
+        action_count = cur.fetchone()['cnt']
+
+        # Build sparkline in the format the frontend expects: {day, phantom}
+        sparkline = []
+        for entry in runway_data['daily_projection'][:14]:
+            sparkline.append({
+                "day": entry['date'],
+                "phantom": entry['balance'],
+            })
+
         return {
             "vitals": {
-                "totalBank": current_balance,
-                "phantomUsable": phantom_usable,
-                "daysToZero": days_to_zero
+                "totalBank": runway_data['current_balance'],
+                "phantomUsable": phantom_data['usable_cash'],
+                "daysToZero": runway_data['days_to_zero']
             },
             "actions": actions,
-            "sparkline": sparkline
+            "actionCount": action_count,
+            "sparkline": sparkline,
+            "optimization": optimization_data
         }
     finally:
         cur.close()
@@ -81,15 +86,38 @@ def get_inbox():
             action_type_ui = "Payment Follow-up"
             if log['execution_type'] == 'SYSTEM_ALERT':
                 action_type_ui = "System Alert"
-                
+
+            # Normalize chain_of_thought into a consistent steps array
+            cot = log['chain_of_thought']
+            steps = []
+            if cot and isinstance(cot, dict):
+                # Convert each key-value pair into a step
+                for key, value in cot.items():
+                    label = key.replace('_', ' ').title()
+                    detail = str(value) if value is not None else "N/A"
+                    steps.append({"label": label, "detail": detail})
+            elif cot and isinstance(cot, str):
+                steps.append({"label": "Reasoning", "detail": cot})
+            elif cot and isinstance(cot, list):
+                for i, item in enumerate(cot):
+                    steps.append({"label": f"Step {i+1}", "detail": str(item)})
+
+            # Normalize payload into action details
+            payload = log['execution_payload']
+            payload_steps = []
+            if payload and isinstance(payload, dict):
+                for key, value in payload.items():
+                    label = key.replace('_', ' ').title()
+                    payload_steps.append({"label": label, "detail": str(value)})
+
             formatted_logs.append({
                 "id": str(log['id']),
                 "priority": "critical" if 'URGENT' in log['message'] else "high",
-                "vendor": log.get('company_id', 'CashPilot AI'),
+                "vendor": str(log.get('company_id', 'CashPilot AI')),
                 "actionType": action_type_ui,
                 "summary": log['message'],
-                "chainOfThought": log['chain_of_thought'],
-                "payload": log['execution_payload']
+                "chainOfThought": steps,
+                "payload": payload_steps
             })
             
         return {"inbox": formatted_logs}

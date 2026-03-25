@@ -1,9 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useSimulation } from "./context/SimulationContext";
-import { TrendingDown, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react";
+import { TrendingDown, AlertTriangle, CheckCircle2, ChevronRight, Zap, Shield, Clock } from "lucide-react";
 import Link from "next/link";
-import { ResponsiveContainer, AreaChart, Area, Tooltip, ReferenceLine } from "recharts";
+import { ResponsiveContainer, AreaChart, Area, Tooltip, ReferenceLine, XAxis } from "recharts";
 
 function fmt(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -13,6 +13,13 @@ const priorityColor: Record<string, string> = {
   critical: "bg-red-50 border-red-200 text-red-700",
   high: "bg-amber-50 border-amber-200 text-amber-700",
   medium: "bg-blue-50 border-blue-200 text-blue-700",
+};
+
+const tierStyle: Record<number, { bg: string; text: string; label: string }> = {
+  0: { bg: "bg-red-100", text: "text-red-700", label: "Locked" },
+  1: { bg: "bg-amber-100", text: "text-amber-700", label: "Penalty" },
+  2: { bg: "bg-blue-100", text: "text-blue-700", label: "Relational" },
+  3: { bg: "bg-emerald-100", text: "text-emerald-700", label: "Flexible" },
 };
 
 export default function DashboardPage() {
@@ -36,9 +43,14 @@ export default function DashboardPage() {
 
   if (!data) return <div className="p-8"><div className="shimmer h-40 rounded-2xl" /></div>;
 
-  const { vitals, sparkline, actions } = data;
+  const { vitals, sparkline, actions, optimization } = data;
   const runwayDanger = vitals.daysToZero < 14;
   const urgentActions = actions.slice(0, 2);
+
+  // Only show actionable vendors (those with delay_amount > 0)
+  const actionableVendors = optimization?.optimized_obligations?.filter(
+    (ob: any) => ob.delay_amount > 0
+  ) || [];
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
@@ -81,7 +93,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Bottom row: sparkline + urgent actions */}
-      <div className="grid grid-cols-5 gap-5">
+      <div className="grid grid-cols-5 gap-5 mb-8">
         {/* Sparkline */}
         <div className="col-span-3 bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
@@ -99,10 +111,12 @@ export default function DashboardPage() {
                   <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                 </linearGradient>
               </defs>
+              <XAxis dataKey="day" tick={{ fill: "#94a3b8", fontSize: 9 }} tickLine={false} axisLine={false} interval={2} />
               <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 2" strokeWidth={1} />
               <Tooltip
                 contentStyle={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 11 }}
-                formatter={(v) => [`$${Number(v).toLocaleString()}`, "Phantom Cash"]}
+                formatter={(v: any) => [`$${Number(v).toLocaleString()}`, "Phantom Cash"]}
+                labelFormatter={(label: string) => `Day: ${label}`}
               />
               <Area type="monotone" dataKey="phantom" stroke="#10b981" strokeWidth={2} fill="url(#phantomGrad)" dot={false} />
             </AreaChart>
@@ -131,6 +145,97 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* LP Solver Optimization Strategy */}
+      {optimization && optimization.status !== "UNAVAILABLE" && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center">
+                <Zap size={16} className="text-indigo-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-800">LP Optimization Strategy</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {optimization.status === "SUCCESS"
+                    ? `${actionableVendors.length} vendor${actionableVendors.length !== 1 ? "s" : ""} with recommended actions`
+                    : optimization.status === "NO_OPTIMIZATION_NEEDED"
+                    ? "All obligations covered — no changes needed"
+                    : "Optimization could not be computed"}
+                </p>
+              </div>
+            </div>
+            {optimization.status === "SUCCESS" && optimization.breach_prevented && (
+              <span className="text-[10px] bg-emerald-50 border border-emerald-200 text-emerald-600 font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide flex items-center gap-1">
+                <Shield size={10} /> Breach Prevented
+              </span>
+            )}
+          </div>
+
+          {optimization.status === "NO_OPTIMIZATION_NEEDED" && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 flex items-center gap-3">
+              <CheckCircle2 size={16} className="text-emerald-500 shrink-0" />
+              <p className="text-xs text-emerald-700">
+                Current balance fully covers all upcoming obligations. No payment deferrals needed.
+              </p>
+            </div>
+          )}
+
+          {actionableVendors.length > 0 && (
+            <div className="flex flex-col gap-3">
+              {actionableVendors.map((ob: any, idx: number) => {
+                const ts = tierStyle[ob.ontology_tier] || tierStyle[3];
+                return (
+                  <div key={ob.obligation_id || idx} className="bg-gray-50 rounded-xl border border-gray-100 px-5 py-4 flex items-center gap-4">
+                    {/* Vendor info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="text-sm font-semibold text-gray-800 truncate">{ob.entity_name}</p>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${ts.bg} ${ts.text} uppercase tracking-wide`}>
+                          Tier {ob.ontology_tier} · {ts.label}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400">
+                        Due {ob.original_due} · Goodwill: {ob.goodwill_score ?? "N/A"}/100
+                      </p>
+                    </div>
+
+                    {/* Pay now / Delay split */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="text-center">
+                        <p className="text-[10px] text-gray-400 mb-0.5">Pay Now</p>
+                        <p className="text-sm font-bold text-emerald-600">{fmt(ob.pay_now)}</p>
+                      </div>
+                      <div className="w-px h-8 bg-gray-200" />
+                      <div className="text-center">
+                        <p className="text-[10px] text-gray-400 mb-0.5">Delay</p>
+                        <p className="text-sm font-bold text-amber-600">{fmt(ob.delay_amount)}</p>
+                      </div>
+                      <div className="w-px h-8 bg-gray-200" />
+                      <div className="text-center">
+                        <p className="text-[10px] text-gray-400 mb-0.5 flex items-center gap-0.5"><Clock size={9} /> New Due</p>
+                        <p className="text-xs font-semibold text-gray-600">{ob.new_due_date}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Summary footer */}
+              {optimization.total_delayed > 0 && (
+                <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 mt-1">
+                  <p className="text-xs text-indigo-700 font-medium">
+                    Total deferred: <span className="font-bold">{fmt(optimization.total_delayed)}</span>
+                  </p>
+                  <p className="text-xs text-indigo-500">
+                    Est. cost: {fmt(optimization.projected_savings)} saved vs. full penalties
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

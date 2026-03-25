@@ -2,6 +2,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, BarChart2, Upload, Inbox, Wifi } from "lucide-react";
+import { useState, useEffect } from "react";
+import { useSimulation } from "../context/SimulationContext";
 
 import SimulationSlider from "./SimulationSlider";
 
@@ -14,6 +16,21 @@ const nav = [
 
 export default function Sidebar() {
   const path = usePathname();
+  const { refreshKey } = useSimulation();
+  const [actionCount, setActionCount] = useState<number>(0);
+
+  useEffect(() => {
+    async function fetchCount() {
+      try {
+        const res = await fetch("http://localhost:8000/api/dashboard");
+        if (res.ok) {
+          const json = await res.json();
+          setActionCount(json.actionCount || 0);
+        }
+      } catch {}
+    }
+    fetchCount();
+  }, [refreshKey]);
 
   return (
     <aside className="w-60 shrink-0 bg-white border-r border-gray-200 flex flex-col h-screen sticky top-0">
@@ -39,8 +56,8 @@ export default function Sidebar() {
             >
               <Icon size={16} strokeWidth={active ? 2.5 : 1.8} />
               {label}
-              {label === "Action Inbox" && (
-                <span className="ml-auto bg-red-100 text-red-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full">4</span>
+              {label === "Action Inbox" && actionCount > 0 && (
+                <span className="ml-auto bg-red-100 text-red-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{actionCount}</span>
               )}
             </Link>
           );

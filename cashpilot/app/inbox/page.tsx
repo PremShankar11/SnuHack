@@ -2,15 +2,17 @@
 import { useState, useEffect } from "react";
 import { useSimulation } from "../context/SimulationContext";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronRight, X, CheckCircle2, XCircle, Zap, Mail } from "lucide-react";
+import { ChevronRight, X, CheckCircle2, XCircle, Zap, Mail, FileText } from "lucide-react";
+
+export type Step = { label: string; detail: string };
 
 export type Action = {
   id: string;
   title: string;
   subtitle: string;
   priority: "critical" | "high" | "medium";
-  emailDraft: string;
-  steps: { label: string; detail: string }[];
+  steps: Step[];
+  payload: Step[];
 };
 
 const priorityStyles: Record<string, { badge: string; dot: string }> = {
@@ -30,16 +32,13 @@ export default function InboxPage() {
         const res = await fetch("http://localhost:8000/api/inbox");
         if (res.ok) {
           const json = await res.json();
-          const mapped = json.inbox.map((log: any) => ({
+          const mapped: Action[] = json.inbox.map((log: any) => ({
             id: log.id,
             title: log.actionType,
             subtitle: log.summary,
             priority: log.priority,
-            emailDraft: "Drafting via Gemini...", 
-            steps: log.chainOfThought ? [
-              { label: "Reasoning", detail: log.chainOfThought.reason },
-              { label: "Projected Horizon", detail: log.chainOfThought.horizon }
-            ] : []
+            steps: Array.isArray(log.chainOfThought) ? log.chainOfThought : [],
+            payload: Array.isArray(log.payload) ? log.payload : [],
           }));
           setActions(mapped);
         }
@@ -53,7 +52,6 @@ export default function InboxPage() {
   const dismiss = async (id: string) => {
     setActions((prev) => prev.filter((a) => a.id !== id));
     setSelected(null);
-    // Real app would POST to resolve the action in DB here
   };
 
   return (
@@ -87,7 +85,7 @@ export default function InboxPage() {
               <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-gray-800">{action.title}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{action.subtitle}</p>
+                <p className="text-xs text-gray-400 mt-0.5 truncate">{action.subtitle}</p>
               </div>
               <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border uppercase tracking-wide shrink-0 ${style.badge}`}>
                 {action.priority}
@@ -134,49 +132,62 @@ export default function InboxPage() {
               {/* Modal body — two columns */}
               <div className="flex-1 overflow-y-auto">
                 <div className="grid grid-cols-2 divide-x divide-gray-100 min-h-full">
-                  {/* Left: AI draft */}
-                  <div className="p-8">
-                    <div className="flex items-center gap-2 mb-4">
-                      <Mail size={14} className="text-gray-400" />
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">AI Drafted Email</p>
-                    </div>
-                    <div className="bg-gray-50 rounded-2xl p-5 text-xs text-gray-600 leading-relaxed whitespace-pre-wrap font-mono border border-gray-100">
-                      {selected.emailDraft}
-                    </div>
-                  </div>
-
-                  {/* Right: Chain-of-thought stepper */}
+                  {/* Left: Chain-of-Thought Audit Trail */}
                   <div className="p-8">
                     <div className="flex items-center gap-2 mb-6">
                       <Zap size={14} className="text-indigo-400" />
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Chain-of-Thought Audit Trail</p>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Chain-of-Thought</p>
                     </div>
-                    <div className="flex flex-col gap-0">
-                      {selected.steps.map((step, idx) => (
-                        <motion.div
-                          key={idx}
-                          initial={{ opacity: 0, x: 10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: idx * 0.1 }}
-                          className="flex gap-4"
-                        >
-                          {/* Stepper line */}
-                          <div className="flex flex-col items-center">
-                            <div className="w-7 h-7 rounded-full bg-indigo-50 border-2 border-indigo-200 flex items-center justify-center text-indigo-600 text-xs font-bold shrink-0">
-                              {idx + 1}
+                    {selected.steps.length === 0 ? (
+                      <p className="text-xs text-gray-400 italic">No reasoning data recorded for this action.</p>
+                    ) : (
+                      <div className="flex flex-col gap-0">
+                        {selected.steps.map((step: Step, idx: number) => (
+                          <motion.div
+                            key={idx}
+                            initial={{ opacity: 0, x: 10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: idx * 0.1 }}
+                            className="flex gap-4"
+                          >
+                            {/* Stepper line */}
+                            <div className="flex flex-col items-center">
+                              <div className="w-7 h-7 rounded-full bg-indigo-50 border-2 border-indigo-200 flex items-center justify-center text-indigo-600 text-xs font-bold shrink-0">
+                                {idx + 1}
+                              </div>
+                              {idx < selected.steps.length - 1 && (
+                                <div className="w-px flex-1 bg-indigo-100 my-1" />
+                              )}
                             </div>
-                            {idx < selected.steps.length - 1 && (
-                              <div className="w-px flex-1 bg-indigo-100 my-1" />
-                            )}
-                          </div>
-                          {/* Step content */}
-                          <div className={`pb-6 ${idx === selected.steps.length - 1 ? "pb-0" : ""}`}>
-                            <p className="text-sm font-semibold text-gray-800 mb-0.5">{step.label}</p>
-                            <p className="text-xs text-gray-500 leading-relaxed">{step.detail}</p>
-                          </div>
-                        </motion.div>
-                      ))}
+                            {/* Step content */}
+                            <div className={`pb-6 ${idx === selected.steps.length - 1 ? "pb-0" : ""}`}>
+                              <p className="text-sm font-semibold text-gray-800 mb-0.5">{step.label}</p>
+                              <p className="text-xs text-gray-500 leading-relaxed">{step.detail}</p>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right: Recommended Action */}
+                  <div className="p-8">
+                    <div className="flex items-center gap-2 mb-6">
+                      <FileText size={14} className="text-gray-400" />
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Recommended Action</p>
                     </div>
+                    {selected.payload.length === 0 ? (
+                      <p className="text-xs text-gray-400 italic">No action payload recorded.</p>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        {selected.payload.map((item: Step, idx: number) => (
+                          <div key={idx} className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+                            <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-1">{item.label}</p>
+                            <p className="text-xs text-gray-700 leading-relaxed">{item.detail}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
