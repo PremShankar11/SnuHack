@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useSimulation } from "../context/SimulationContext";
+import { mockState } from "../mockState";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid, Legend,
@@ -55,6 +56,40 @@ export default function AnalyticsPage() {
 
   // Check if breach occurs
   const hasLiquidityBreach = cashFlow.some(d => d.standard < 0 || d.phantom < 0);
+  const [decisionData, setDecisionData] = useState<any>(null);
+  const [dashboardData, setDashboardData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        // Fetch decision data from Quant Engine
+        const [decisionRes, dashboardRes] = await Promise.all([
+          fetch("http://localhost:8000/quant/api/decision"),
+          fetch("http://localhost:8000/quant/api/dashboard"),
+        ]);
+
+        if (decisionRes.ok) {
+          const decisionJson = await decisionRes.json();
+          setDecisionData(decisionJson.solver_directive);
+        }
+
+        if (dashboardRes.ok) {
+          const dashboardJson = await dashboardRes.json();
+          setDashboardData(dashboardJson.global_state);
+        }
+      } catch (err) {
+        console.error("Failed to fetch analytics data", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, []);
+
+  const survivalProb = dashboardData?.runway_metrics?.monte_carlo_survival_prob || 0;
+  const breachAmount = decisionData?.breach_amount || 0;
+  const hasLiquidityBreach = breachAmount < 0;
 
   return (
     <div className={`p-8 max-w-5xl mx-auto transition-opacity duration-300 ${isSimulating ? "opacity-60" : "opacity-100"}`}>
@@ -63,6 +98,19 @@ export default function AnalyticsPage() {
         <p className="text-sm text-gray-400 mt-1">
           Live from Supabase · Simulated as of {simulatedDate}
         </p>
+        <p className="text-sm text-gray-400 mt-1">Math engine · LP Solver · Monte Carlo</p>
+        {!loading && (
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-1 rounded-full font-medium">
+              Quant Engine Active
+            </span>
+            {hasLiquidityBreach && (
+              <span className="text-xs bg-red-50 border border-red-200 text-red-600 px-2 py-1 rounded-full font-medium">
+                Liquidity Breach: {breachAmount.toLocaleString("en-US", { style: "currency", currency: "USD" })}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Main dual-line chart */}
@@ -86,12 +134,12 @@ export default function AnalyticsPage() {
               tick={{ fill: "#94a3b8", fontSize: 10 }}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+              tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
               width={40}
             />
             <Tooltip
               contentStyle={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, fontSize: 11 }}
-              formatter={(v, name) => [`$${Number(v).toLocaleString()}`, name === "standard" ? "Standard Balance" : "Phantom Usable"]}
+              formatter={(v, name) => [`${Number(v).toLocaleString()}`, name === "standard" ? "Standard Balance" : "Phantom Usable"]}
             />
             <Legend
               formatter={(v) => v === "standard" ? "Standard Balance" : "Phantom Usable"}
@@ -104,12 +152,12 @@ export default function AnalyticsPage() {
         </ResponsiveContainer>
       </div>
 
-      {/* Monte Carlo + Goodwill Radar */}
-      <div className="grid grid-cols-2 gap-6">
+      {/* Monte Carlo + LP Optimizer Results */}
+      <div className="grid grid-cols-2 gap-6 mb-6">
         {/* Monte Carlo */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 fade-in">
           <p className="text-sm font-semibold text-gray-800 mb-1">Monte Carlo Engine</p>
-          <p className="text-xs text-gray-400 mb-5">{monteCarlo.simulations.toLocaleString()} simulations of invoice payment latency</p>
+          <p className="text-xs text-gray-400 mb-5">1,000 simulations of invoice payment latency</p>
 
           {/* Big probability ring */}
           <div className="flex items-center gap-6 mb-6">
@@ -118,19 +166,19 @@ export default function AnalyticsPage() {
                 <circle cx="18" cy="18" r="15.9" fill="none" stroke="#f1f5f9" strokeWidth="3" />
                 <circle
                   cx="18" cy="18" r="15.9" fill="none"
-                  stroke={monteCarlo.probability >= 70 ? "#10b981" : monteCarlo.probability >= 40 ? "#f59e0b" : "#ef4444"}
+                  stroke={survivalProb >= 0.7 ? "#10b981" : survivalProb >= 0.4 ? "#f59e0b" : "#ef4444"}
                   strokeWidth="3"
-                  strokeDasharray={`${monteCarlo.probability} ${100 - monteCarlo.probability}`}
+                  strokeDasharray={`${survivalProb * 100} ${100 - survivalProb * 100}`}
                   strokeLinecap="round"
                 />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-xl font-black text-gray-800">{monteCarlo.probability}%</span>
+                <span className="text-xl font-black text-gray-800">{(survivalProb * 100).toFixed(0)}%</span>
               </div>
             </div>
             <div className="flex flex-col gap-2">
               <p className="text-xs font-semibold text-gray-700">Probability of Survival</p>
-              <p className="text-[11px] text-gray-400">Based on invoice latency variance across {monteCarlo.simulations.toLocaleString()} runs</p>
+              <p className="text-[11px] text-gray-400">Based on invoice latency variance across 1,000 runs</p>
             </div>
           </div>
 
@@ -162,6 +210,78 @@ export default function AnalyticsPage() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* LP Optimizer Results */}
+      {decisionData && decisionData.optimization_result && decisionData.optimization_result.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+          <div className="mb-4">
+            <p className="text-sm font-semibold text-gray-800">LP Optimizer Results</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Payment decisions optimized to minimize late fees + goodwill penalties
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            {decisionData.optimization_result.map((result: any) => {
+              const isFullPayment = result.math_decision === "FULL";
+              const isFractional = result.math_decision === "FRACTIONAL_PAYMENT";
+              const isDelay = result.math_decision === "DELAY";
+
+              return (
+                <div
+                  key={result.obligation_id}
+                  className={`border rounded-xl p-4 ${
+                    isFullPayment
+                      ? "border-emerald-200 bg-emerald-50"
+                      : isFractional
+                      ? "border-amber-200 bg-amber-50"
+                      : "border-red-200 bg-red-50"
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-gray-800">{result.entity_name}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">Due: {result.original_due}</p>
+                    </div>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wide ${
+                        isFullPayment
+                          ? "bg-emerald-100 text-emerald-700"
+                          : isFractional
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {result.math_decision.replace("_", " ")}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-3">
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wide">Pay Now</p>
+                      <p className="text-sm font-bold text-gray-800">
+                        ${result.pay_now_amount.toLocaleString()}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wide">Delay</p>
+                      <p className="text-sm font-bold text-gray-800">
+                        ${result.delay_amount.toLocaleString()}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wide">Extension</p>
+                      <p className="text-sm font-bold text-gray-800">
+                        {result.requested_extension_days} days
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
