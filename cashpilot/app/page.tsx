@@ -16,7 +16,7 @@ const priorityColor: Record<string, string> = {
 };
 
 export default function DashboardPage() {
-  const { simulatedDate } = useSimulation();
+  const { simulatedDate, refreshKey, isSimulating } = useSimulation();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +62,7 @@ export default function DashboardPage() {
       }
     }
     fetchDashboard();
-  }, [simulatedDate]);
+  }, [refreshKey]);
 
   if (loading) {
     return (

@@ -1,9 +1,11 @@
 "use client";
-import React, { createContext, useContext, useState, ReactNode } from "react";
+import React, { createContext, useContext, useState, useCallback, ReactNode } from "react";
 
 type SimulationContextType = {
   daysOffset: number;
   simulatedDate: string;
+  refreshKey: number;
+  isSimulating: boolean;
   triggerSimulation: (offset: number) => Promise<void>;
 };
 
@@ -14,9 +16,12 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
   const [simulatedDate, setSimulatedDate] = useState<string>(() => {
     return new Date().toISOString().split('T')[0];
   });
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [isSimulating, setIsSimulating] = useState(false);
 
-  const triggerSimulation = async (offset: number) => {
-    if (offset <= daysOffset) return; // Only move forward
+  const triggerSimulation = useCallback(async (offset: number) => {
+    if (offset === daysOffset) return;
+    setIsSimulating(true);
 
     try {
       const res = await fetch("http://localhost:8000/api/simulate/advance", {
@@ -28,18 +33,21 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
         const data = await res.json();
         setDaysOffset(offset);
         setSimulatedDate(data.simulated_as_of.split('T')[0]);
-        // Also could trigger global re-fetch here if we used SWR/React Query
+        // Bump refresh key so all consumers re-fetch
+        setRefreshKey((k) => k + 1);
         console.log("Simulation advanced to:", data.simulated_as_of);
       } else {
         console.error("Failed to advance simulation");
       }
     } catch (e) {
       console.error("Error advancing simulation:", e);
+    } finally {
+      setIsSimulating(false);
     }
-  };
+  }, [daysOffset]);
 
   return (
-    <SimulationContext.Provider value={{ daysOffset, simulatedDate, triggerSimulation }}>
+    <SimulationContext.Provider value={{ daysOffset, simulatedDate, refreshKey, isSimulating, triggerSimulation }}>
       {children}
     </SimulationContext.Provider>
   );

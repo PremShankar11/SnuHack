@@ -20,7 +20,7 @@ const priorityStyles: Record<string, { badge: string; dot: string }> = {
 };
 
 export default function InboxPage() {
-  const { simulatedDate } = useSimulation();
+  const { simulatedDate, refreshKey } = useSimulation();
   const [actions, setActions] = useState<Action[]>([]);
   const [selected, setSelected] = useState<Action | null>(null);
 
@@ -30,7 +30,6 @@ export default function InboxPage() {
         const res = await fetch("http://localhost:8000/api/inbox");
         if (res.ok) {
           const json = await res.json();
-          // Map backend logs to UI Action type
           const mapped = json.inbox.map((log: any) => ({
             id: log.id,
             title: log.actionType,
@@ -49,7 +48,7 @@ export default function InboxPage() {
       }
     }
     fetchInbox();
-  }, [simulatedDate]);
+  }, [refreshKey]);
 
   const dismiss = async (id: string) => {
     setActions((prev) => prev.filter((a) => a.id !== id));

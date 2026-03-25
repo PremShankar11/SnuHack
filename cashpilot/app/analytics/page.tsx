@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useSimulation } from "../context/SimulationContext";
 import { mockState } from "../mockState";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -9,11 +10,52 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
 } from "recharts";
 
-const { cashFlow, monteCarlo, vendors } = mockState;
-
-const radarData = vendors.map((v) => ({ vendor: v.name, score: v.goodwill }));
+type AnalyticsData = {
+  cashFlow: { day: string; standard: number; phantom: number }[];
+  vendors: { name: string; goodwill: number }[];
+  monteCarlo: { simulations: number; probability: number; p10: number; median: number; p90: number };
+};
 
 export default function AnalyticsPage() {
+  const { refreshKey, isSimulating, simulatedDate } = useSimulation();
+  const [data, setData] = useState<AnalyticsData | null>(null);
+
+  useEffect(() => {
+    async function fetchAnalytics() {
+      try {
+        const res = await fetch("http://localhost:8000/api/analytics");
+        if (res.ok) {
+          const json = await res.json();
+          setData(json);
+        }
+      } catch (err) {
+        console.error("Failed to fetch analytics", err);
+      }
+    }
+    fetchAnalytics();
+  }, [refreshKey]);
+
+  if (!data) {
+    return (
+      <div className="p-8 max-w-5xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
+          <p className="text-sm text-gray-400 mt-1">Loading live data from Supabase…</p>
+        </div>
+        <div className="shimmer h-72 rounded-2xl mb-6" />
+        <div className="grid grid-cols-2 gap-6">
+          <div className="shimmer h-64 rounded-2xl" />
+          <div className="shimmer h-64 rounded-2xl" />
+        </div>
+      </div>
+    );
+  }
+
+  const { cashFlow, monteCarlo, vendors } = data;
+  const radarData = vendors.map((v) => ({ vendor: v.name, score: v.goodwill }));
+
+  // Check if breach occurs
+  const hasLiquidityBreach = cashFlow.some(d => d.standard < 0 || d.phantom < 0);
   const [decisionData, setDecisionData] = useState<any>(null);
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -50,9 +92,12 @@ export default function AnalyticsPage() {
   const hasLiquidityBreach = breachAmount < 0;
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className={`p-8 max-w-5xl mx-auto transition-opacity duration-300 ${isSimulating ? "opacity-60" : "opacity-100"}`}>
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
+        <p className="text-sm text-gray-400 mt-1">
+          Live from Supabase · Simulated as of {simulatedDate}
+        </p>
         <p className="text-sm text-gray-400 mt-1">Math engine · LP Solver · Monte Carlo</p>
         {!loading && (
           <div className="mt-2 flex items-center gap-2">
@@ -69,7 +114,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Main dual-line chart */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-6">
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-6 fade-in">
         <div className="flex items-start justify-between mb-6">
           <div>
             <p className="text-sm font-semibold text-gray-800">30-Day Cash Projection</p>
@@ -110,7 +155,7 @@ export default function AnalyticsPage() {
       {/* Monte Carlo + LP Optimizer Results */}
       <div className="grid grid-cols-2 gap-6 mb-6">
         {/* Monte Carlo */}
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 fade-in">
           <p className="text-sm font-semibold text-gray-800 mb-1">Monte Carlo Engine</p>
           <p className="text-xs text-gray-400 mb-5">1,000 simulations of invoice payment latency</p>
 
@@ -152,9 +197,9 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Goodwill Radar */}
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 fade-in">
           <p className="text-sm font-semibold text-gray-800 mb-1">Vendor Goodwill Radar</p>
-          <p className="text-xs text-gray-400 mb-4">Ontology health scores by vendor</p>
+          <p className="text-xs text-gray-400 mb-4">Ontology health scores by vendor · Live from Supabase</p>
           <ResponsiveContainer width="100%" height={220}>
             <RadarChart data={radarData} margin={{ top: 0, right: 20, bottom: 0, left: 20 }}>
               <PolarGrid stroke="#f1f5f9" />
