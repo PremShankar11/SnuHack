@@ -1,10 +1,17 @@
 "use client";
-import { useState } from "react";
-import { mockState, type Action } from "../mockState";
+import { useState, useEffect } from "react";
+import { useSimulation } from "../context/SimulationContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronRight, X, CheckCircle2, XCircle, Zap, Mail } from "lucide-react";
 
-const { actions: initialActions } = mockState;
+export type Action = {
+  id: string;
+  title: string;
+  subtitle: string;
+  priority: "critical" | "high" | "medium";
+  emailDraft: string;
+  steps: { label: string; detail: string }[];
+};
 
 const priorityStyles: Record<string, { badge: string; dot: string }> = {
   critical: { badge: "bg-red-50 text-red-600 border-red-200", dot: "bg-red-500" },
@@ -13,12 +20,41 @@ const priorityStyles: Record<string, { badge: string; dot: string }> = {
 };
 
 export default function InboxPage() {
-  const [actions, setActions] = useState(initialActions);
+  const { simulatedDate } = useSimulation();
+  const [actions, setActions] = useState<Action[]>([]);
   const [selected, setSelected] = useState<Action | null>(null);
 
-  const dismiss = (id: string) => {
+  useEffect(() => {
+    async function fetchInbox() {
+      try {
+        const res = await fetch("http://localhost:8000/api/inbox");
+        if (res.ok) {
+          const json = await res.json();
+          // Map backend logs to UI Action type
+          const mapped = json.inbox.map((log: any) => ({
+            id: log.id,
+            title: log.actionType,
+            subtitle: log.summary,
+            priority: log.priority,
+            emailDraft: "Drafting via Gemini...", 
+            steps: log.chainOfThought ? [
+              { label: "Reasoning", detail: log.chainOfThought.reason },
+              { label: "Projected Horizon", detail: log.chainOfThought.horizon }
+            ] : []
+          }));
+          setActions(mapped);
+        }
+      } catch (err) {
+        console.error("Failed to fetch inbox:", err);
+      }
+    }
+    fetchInbox();
+  }, [simulatedDate]);
+
+  const dismiss = async (id: string) => {
     setActions((prev) => prev.filter((a) => a.id !== id));
     setSelected(null);
+    // Real app would POST to resolve the action in DB here
   };
 
   return (

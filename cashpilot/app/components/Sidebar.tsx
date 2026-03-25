@@ -3,6 +3,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, BarChart2, Upload, Inbox, Wifi } from "lucide-react";
 
+import SimulationSlider from "./SimulationSlider";
+
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },

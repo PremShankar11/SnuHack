@@ -1,10 +1,9 @@
 "use client";
-import { mockState } from "./mockState";
+import { useState, useEffect } from "react";
+import { useSimulation } from "./context/SimulationContext";
 import { TrendingDown, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { ResponsiveContainer, AreaChart, Area, Tooltip, ReferenceLine } from "recharts";
-
-const { vitals, sparkline, actions } = mockState;
 
 function fmt(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -17,6 +16,27 @@ const priorityColor: Record<string, string> = {
 };
 
 export default function DashboardPage() {
+  const { simulatedDate } = useSimulation();
+  const [data, setData] = useState<any>(null);
+
+  useEffect(() => {
+    async function fetchDashboard() {
+      try {
+        const res = await fetch("http://localhost:8000/api/dashboard");
+        if (res.ok) {
+          const json = await res.json();
+          setData(json);
+        }
+      } catch (err) {
+        console.error("Failed to fetch dashboard", err);
+      }
+    }
+    fetchDashboard();
+  }, [simulatedDate]);
+
+  if (!data) return <div className="p-8"><p>Loading simulation data...</p></div>;
+
+  const { vitals, sparkline, actions } = data;
   const runwayDanger = vitals.daysToZero < 14;
   const urgentActions = actions.slice(0, 2);
 
@@ -25,7 +45,7 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Executive Summary</h1>
-        <p className="text-sm text-gray-400 mt-1">Real-time cash intelligence · Updated just now</p>
+        <p className="text-sm text-gray-400 mt-1">Real-time cash intelligence · Simulated as of {simulatedDate}</p>
       </div>
 
       {/* Vitals */}
@@ -69,7 +89,7 @@ export default function DashboardPage() {
               <p className="text-sm font-semibold text-gray-800">14-Day Cash Runway</p>
               <p className="text-xs text-gray-400 mt-0.5">Phantom usable projection</p>
             </div>
-            <TrendingDown size={16} className="text-red-400" />
+            {runwayDanger && <TrendingDown size={16} className="text-red-400" />}
           </div>
           <ResponsiveContainer width="100%" height={120}>
             <AreaChart data={sparkline} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
@@ -98,12 +118,16 @@ export default function DashboardPage() {
             </Link>
           </div>
           <div className="flex flex-col gap-3 flex-1">
-            {urgentActions.map((a) => (
-              <Link key={a.id} href="/inbox" className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all hover:shadow-sm ${priorityColor[a.priority]}`}>
-                <p className="font-semibold truncate">{a.title}</p>
-                <p className="opacity-70 mt-0.5 text-[11px]">{a.subtitle}</p>
-              </Link>
-            ))}
+            {urgentActions.length === 0 ? (
+              <p className="text-xs text-gray-400">No urgent actions pending.</p>
+            ) : (
+              urgentActions.map((a: any) => (
+                <Link key={a.id} href="/inbox" className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all hover:shadow-sm ${priorityColor[a.priority]}`}>
+                  <p className="font-semibold truncate">{a.title}</p>
+                  <p className="opacity-70 mt-0.5 text-[11px]">{a.subtitle}</p>
+                </Link>
+              ))
+            )}
           </div>
         </div>
       </div>

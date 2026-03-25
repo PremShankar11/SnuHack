@@ -4,18 +4,56 @@ import { mockState } from "../mockState";
 import { Upload, CheckCircle2, Link2, AlertCircle, Wifi } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-const { ingestion } = mockState;
-
 export default function IngestionPage() {
   const [dragging, setDragging] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState(false);
+  const [ledgerItems, setLedgerItems] = useState(mockState.ingestion.recentItems);
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    setScanning(true);
-    setTimeout(() => { setScanning(false); setScanned(true); }, 2800);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      setScanning(true);
+      
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        
+        const res = await fetch("http://localhost:8000/api/ingest/receipt", {
+          method: "POST",
+          body: formData,
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          // Add the parsed receipt to front of ledger
+          const parsed = data.parsed_receipt;
+          const newItem = {
+            id: String(Date.now()),
+            source: "API",
+            description: parsed.entity || "Unknown Vendor",
+            amount: parsed.amount || 0,
+            date: new Date().toISOString().split("T")[0],
+            matched: parsed.action?.includes("Merged") || false,
+            matchedWith: parsed.action,
+            confidence: 99
+          };
+          
+          setLedgerItems(prev => [newItem, ...prev]);
+        } else {
+          console.error("Failed to parse receipt:", await res.text());
+        }
+      } catch (err) {
+        console.error("Network or API error", err);
+      } finally {
+        setScanning(false);
+        setScanned(true);
+        setTimeout(() => setScanned(false), 3000); // reset success state
+      }
+    }
   };
 
   return (
@@ -104,27 +142,24 @@ export default function IngestionPage() {
             <p className="text-xs text-gray-400 mt-0.5">N-Way fuzzy match · AI confidence scoring</p>
           </div>
           <span className="text-[10px] bg-indigo-50 text-indigo-600 font-semibold px-2.5 py-1 rounded-full border border-indigo-100 uppercase tracking-wide">
-            {ingestion.recentItems.filter((r) => r.matched).length} matched
+            {ledgerItems.filter((r) => r.matched).length} matched
           </span>
         </div>
         <div className="divide-y divide-gray-50">
-          {ingestion.recentItems.map((item) => (
+          {ledgerItems.map((item) => (
             <div key={item.id} className="px-6 py-4 flex items-center gap-4">
-              {/* Source badge */}
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 shrink-0 w-16 text-center">
                 {item.source}
               </span>
 
-              {/* Description + amount */}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-800 truncate">{item.description}</p>
                 <p className="text-xs text-gray-400">{item.date}</p>
               </div>
               <p className={`text-sm font-bold shrink-0 ${item.amount < 0 ? "text-red-500" : "text-emerald-600"}`}>
-                {item.amount < 0 ? "-" : "+"}${Math.abs(item.amount).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                {item.amount < 0 ? "" : "+"}{Number(item.amount).toLocaleString("en-US", { style: "currency", currency: "USD" })}
               </p>
 
-              {/* Match indicator */}
               {item.matched ? (
                 <div className="flex items-center gap-2 shrink-0">
                   <Link2 size={13} className="text-indigo-400" />
