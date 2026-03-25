@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from api.router import router as ingest_router
 from dotenv import load_dotenv
 import os
@@ -10,10 +11,25 @@ root_dir = os.path.dirname(current_dir)
 dotenv_path = os.path.join(root_dir, '.env')
 load_dotenv(dotenv_path)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Auto-seed fresh simulation data on every startup."""
+    print("\n🚀 CashPilot starting up — seeding fresh simulation data...")
+    try:
+        from scripts.seed_data import seed_database
+        from scripts.plaid_simulator import generate_simulator_data
+        seed_database()
+        generate_simulator_data()
+        print("✅ Fresh simulation data ready!\n")
+    except Exception as e:
+        print(f"⚠️  Auto-seed failed (non-fatal): {e}\n")
+    yield
+
 app = FastAPI(
     title="CashPilot Backend API",
     description="AI-driven Financial Autopilot for SMBs - Perception Layer",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS config
@@ -40,3 +56,4 @@ if __name__ == "__main__":
     import uvicorn
     # Make sure to run the server from the `backend` directory
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+

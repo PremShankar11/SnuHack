@@ -33,10 +33,14 @@ CREATE TABLE obligations (
 
 CREATE TABLE action_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    obligation_id UUID REFERENCES obligations(id) NULL, 
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    action_type VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    is_resolved BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT now(),
     status VARCHAR(50) DEFAULT 'PENDING_USER', -- 'PENDING_USER', 'NEGOTIATING', 'RESOLVED'
-    chain_of_thought JSONB NOT NULL,
-    execution_type VARCHAR(50) NOT NULL, -- 'GMAIL', 'SHOPIFY', 'STRIPE'
-    execution_payload JSONB NOT NULL,
-    agent_thread_id VARCHAR(255) NULL -- For tracking vendor email replies
+    chain_of_thought JSONB,
+    execution_type VARCHAR(50), -- 'GMAIL', 'SHOPIFY', 'STRIPE', 'SYSTEM_ALERT'
+    execution_payload JSONB,
+    agent_thread_id VARCHAR(255) -- For tracking vendor email replies
 );

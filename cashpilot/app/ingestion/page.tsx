@@ -1,58 +1,107 @@
 "use client";
-import { useState } from "react";
-import { mockState } from "../mockState";
+import { useState, useRef, useEffect } from "react";
+import { useSimulation } from "../context/SimulationContext";
 import { Upload, CheckCircle2, Link2, AlertCircle, Wifi } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
+type LedgerItem = {
+  id: string;
+  source: string;
+  description: string;
+  amount: number;
+  date: string;
+  matched: boolean;
+  confidence: number;
+  matchedWith: string | null;
+};
+
 export default function IngestionPage() {
+  const { refreshKey } = useSimulation();
   const [dragging, setDragging] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const [ledgerItems, setLedgerItems] = useState(mockState.ingestion.recentItems);
+  const [ledgerItems, setLedgerItems] = useState<LedgerItem[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch live transactions from DB
+  useEffect(() => {
+    async function fetchTransactions() {
+      try {
+        const res = await fetch("http://localhost:8000/api/transactions");
+        if (res.ok) {
+          const data = await res.json();
+          setLedgerItems(data.items);
+        }
+      } catch (err) {
+        console.error("Failed to fetch transactions:", err);
+      }
+    }
+    fetchTransactions();
+  }, [refreshKey]);
+
+  const processFile = async (file: File) => {
+    setScanning(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch("http://localhost:8000/api/ingest/receipt", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // reconciliation has flat entity/amount/action; parsed_receipt has nested Gemini output
+        const recon = data.reconciliation || {};
+        const gemini = data.parsed_receipt?.ingestion_event?.parsed_data || {};
+        const newItem = {
+          id: String(Date.now()),
+          source: "API",
+          description: recon.entity || gemini.entity_name || "Unknown Vendor",
+          amount: recon.amount || gemini.amount || 0,
+          date: gemini.due_date || new Date().toISOString().split("T")[0],
+          matched: recon.action?.includes("Merged") || false,
+          matchedWith: recon.action || recon.status || "",
+          confidence: data.parsed_receipt?.ingestion_event?.reconciliation_confidence
+            ? Math.round(data.parsed_receipt.ingestion_event.reconciliation_confidence * 100)
+            : 95,
+        };
+
+        setLedgerItems((prev) => [newItem, ...prev]);
+      } else {
+        console.error("Failed to parse receipt:", await res.text());
+      }
+    } catch (err) {
+      console.error("Network or API error", err);
+    } finally {
+      setScanning(false);
+      setScanned(true);
+      setTimeout(() => setScanned(false), 3000); // reset success state
+    }
+  };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      setScanning(true);
-      
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
-        
-        const res = await fetch("http://localhost:8000/api/ingest/receipt", {
-          method: "POST",
-          body: formData,
-        });
-        
-        if (res.ok) {
-          const data = await res.json();
-          // Add the parsed receipt to front of ledger
-          const parsed = data.parsed_receipt;
-          const newItem = {
-            id: String(Date.now()),
-            source: "API",
-            description: parsed.entity || "Unknown Vendor",
-            amount: parsed.amount || 0,
-            date: new Date().toISOString().split("T")[0],
-            matched: parsed.action?.includes("Merged") || false,
-            matchedWith: parsed.action,
-            confidence: 99
-          };
-          
-          setLedgerItems(prev => [newItem, ...prev]);
-        } else {
-          console.error("Failed to parse receipt:", await res.text());
-        }
-      } catch (err) {
-        console.error("Network or API error", err);
-      } finally {
-        setScanning(false);
-        setScanned(true);
-        setTimeout(() => setScanned(false), 3000); // reset success state
-      }
+      await processFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      await processFile(e.target.files[0]);
+      // Reset input so the same file can be re-selected
+      e.target.value = "";
+    }
+  };
+
+  const handleClick = () => {
+    if (!scanning) {
+      fileInputRef.current?.click();
     }
   };
 
@@ -63,11 +112,21 @@ export default function IngestionPage() {
         <p className="text-sm text-gray-400 mt-1">Sensors · OCR · Bank sync · Reconciliation</p>
       </div>
 
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,.pdf"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+
       {/* Drop zone */}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
+        onClick={handleClick}
         className={`relative bg-white rounded-2xl border-2 border-dashed transition-all mb-6 p-10 flex flex-col items-center justify-center gap-3 cursor-pointer
           ${dragging ? "border-indigo-400 bg-indigo-50" : "border-gray-200 hover:border-indigo-300 hover:bg-gray-50"}`}
       >
@@ -105,7 +164,7 @@ export default function IngestionPage() {
               <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
                 <Upload size={20} className="text-gray-400" />
               </div>
-              <p className="text-sm font-semibold text-gray-700">Drag &amp; drop receipts or PDFs here</p>
+              <p className="text-sm font-semibold text-gray-700">Drag &amp; drop receipts here, or <span className="text-indigo-600 underline">click to browse</span></p>
               <p className="text-xs text-gray-400">Supports JPG, PNG, PDF · Powered by Gemini Vision OCR</p>
             </motion.div>
           )}

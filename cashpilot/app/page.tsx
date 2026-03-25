@@ -16,7 +16,7 @@ const priorityColor: Record<string, string> = {
 };
 
 export default function DashboardPage() {
-  const { simulatedDate } = useSimulation();
+  const { simulatedDate, refreshKey, isSimulating } = useSimulation();
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {
@@ -32,9 +32,9 @@ export default function DashboardPage() {
       }
     }
     fetchDashboard();
-  }, [simulatedDate]);
+  }, [refreshKey]);
 
-  if (!data) return <div className="p-8"><p>Loading simulation data...</p></div>;
+  if (!data) return <div className="p-8"><div className="shimmer h-40 rounded-2xl" /></div>;
 
   const { vitals, sparkline, actions } = data;
   const runwayDanger = vitals.daysToZero < 14;

@@ -47,6 +47,9 @@ export default function Sidebar() {
         })}
       </nav>
 
+      {/* Simulation Slider */}
+      <SimulationSlider />
+
       {/* Footer */}
       <div className="px-4 py-4 border-t border-gray-100">
         <div className="flex items-center gap-2 mb-3">
