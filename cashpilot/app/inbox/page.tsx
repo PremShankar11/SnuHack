@@ -6,6 +6,8 @@ import { ChevronRight, X, CheckCircle2, XCircle, Zap, Mail, FileText } from "luc
 
 export type Step = { label: string; detail: string };
 
+type RawPayload = Record<string, unknown>;
+
 export type Action = {
   id: string;
   title: string;
@@ -13,6 +15,25 @@ export type Action = {
   priority: "critical" | "high" | "medium";
   steps: Step[];
   payload: Step[];
+  rawPayload?: RawPayload;
+  executionType?: string;
+  rawActionType?: string;
+  canGenerateDrafts?: boolean;
+  hasCommunicationDraft?: boolean;
+};
+
+type InboxApiLog = {
+  id: string;
+  actionType: string;
+  summary: string;
+  priority: "critical" | "high" | "medium";
+  chainOfThought?: Step[];
+  payload?: Step[];
+  rawPayload?: RawPayload;
+  executionType?: string;
+  rawActionType?: string;
+  canGenerateDrafts?: boolean;
+  hasCommunicationDraft?: boolean;
 };
 
 const priorityStyles: Record<string, { badge: string; dot: string }> = {
@@ -21,31 +42,52 @@ const priorityStyles: Record<string, { badge: string; dot: string }> = {
   medium:   { badge: "bg-blue-50 text-blue-600 border-blue-200", dot: "bg-blue-400" },
 };
 
+function getEmailField(payload: RawPayload | undefined, key: string) {
+  const value = payload?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function formatEmailBody(body: string) {
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line, idx, arr) => !(line === "" && arr[idx - 1] === ""));
+}
+
 export default function InboxPage() {
-  const { simulatedDate, refreshKey } = useSimulation();
+  const { refreshKey } = useSimulation();
   const [actions, setActions] = useState<Action[]>([]);
   const [selected, setSelected] = useState<Action | null>(null);
+  const [isGeneratingDrafts, setIsGeneratingDrafts] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  async function fetchInbox() {
+    try {
+      const res = await fetch("http://localhost:8000/api/inbox");
+      if (res.ok) {
+        const json = await res.json();
+        const inboxLogs: InboxApiLog[] = Array.isArray(json.inbox) ? json.inbox : [];
+          const mapped: Action[] = inboxLogs.map((log) => ({
+          id: log.id,
+          title: log.actionType,
+          subtitle: log.summary,
+          priority: log.priority,
+          steps: Array.isArray(log.chainOfThought) ? log.chainOfThought : [],
+          payload: Array.isArray(log.payload) ? log.payload : [],
+          rawPayload: log.rawPayload,
+          executionType: log.executionType,
+          rawActionType: log.rawActionType,
+          canGenerateDrafts: Boolean(log.canGenerateDrafts),
+          hasCommunicationDraft: Boolean(log.hasCommunicationDraft),
+        }));
+        setActions(mapped);
+      }
+    } catch (err) {
+      console.error("Failed to fetch inbox:", err);
+    }
+  }
 
   useEffect(() => {
-    async function fetchInbox() {
-      try {
-        const res = await fetch("http://localhost:8000/api/inbox");
-        if (res.ok) {
-          const json = await res.json();
-          const mapped: Action[] = json.inbox.map((log: any) => ({
-            id: log.id,
-            title: log.actionType,
-            subtitle: log.summary,
-            priority: log.priority,
-            steps: Array.isArray(log.chainOfThought) ? log.chainOfThought : [],
-            payload: Array.isArray(log.payload) ? log.payload : [],
-          }));
-          setActions(mapped);
-        }
-      } catch (err) {
-        console.error("Failed to fetch inbox:", err);
-      }
-    }
     fetchInbox();
   }, [refreshKey]);
 
@@ -54,11 +96,82 @@ export default function InboxPage() {
     setSelected(null);
   };
 
+  const generateDrafts = async (generateAll = false) => {
+    setIsGeneratingDrafts(true);
+    setFeedback(null);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/ai/auto-generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          source_action_id: generateAll ? null : selected?.id ?? null,
+          generate_all: generateAll,
+        }),
+      });
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(json?.detail || "Failed to generate AI drafts.");
+      }
+
+      await fetchInbox();
+      setSelected(null);
+
+      const generatedCount = Number(json?.actions_generated || 0);
+      const errorDetails =
+        Array.isArray(json?.errors) && json.errors.length > 0
+          ? ` ${json.errors.join(" | ")}`
+          : "";
+      const fallbackSuffix = json?.used_fallback ? " Used upcoming payable fallback." : "";
+      const scopeLabel = generateAll ? "for all problems" : "for this problem";
+
+      setFeedback(
+        generatedCount > 0
+          ? `Generated ${generatedCount} AI draft${generatedCount === 1 ? "" : "s"} ${scopeLabel}.${fallbackSuffix}`
+          : `No draft was generated.${errorDetails || fallbackSuffix || " No eligible payable was found."}`
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate AI drafts.";
+      setFeedback(message);
+    } finally {
+      setIsGeneratingDrafts(false);
+    }
+  };
+
+  const selectedEmailFrom = getEmailField(selected?.rawPayload, "email_from");
+  const selectedEmailTo = getEmailField(selected?.rawPayload, "email_to");
+  const selectedEmailSubject = getEmailField(selected?.rawPayload, "email_subject");
+  const selectedEmailBody =
+    getEmailField(selected?.rawPayload, "email_body") ||
+    getEmailField(selected?.rawPayload, "communication_draft");
+  const emailLines = formatEmailBody(selectedEmailBody);
+  const isEmailDraft = Boolean(selected?.hasCommunicationDraft && selectedEmailBody);
+  const hasDraftableProblems = actions.some((action) => action.canGenerateDrafts && !action.hasCommunicationDraft);
+
   return (
     <div className="p-8 max-w-3xl mx-auto">
+      <div className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Action Inbox</h1>
+          <p className="text-sm text-gray-400 mt-1">AI-generated interventions awaiting your approval</p>
+        </div>
+        {hasDraftableProblems && (
+          <button
+            onClick={() => generateDrafts(true)}
+            disabled={isGeneratingDrafts}
+            className="shrink-0 px-4 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-semibold text-sm flex items-center gap-2 transition-colors shadow-sm"
+          >
+            <Mail size={16} />
+            {isGeneratingDrafts ? "Drafting..." : "Draft All Problems"}
+          </button>
+        )}
+      </div>
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Action Inbox</h1>
-        <p className="text-sm text-gray-400 mt-1">AI-generated interventions awaiting your approval</p>
+        {feedback && <p className="text-sm text-indigo-600 mt-3">{feedback}</p>}
       </div>
 
       {/* Inbox list */}
@@ -131,7 +244,7 @@ export default function InboxPage() {
 
               {/* Modal body — two columns */}
               <div className="flex-1 overflow-y-auto">
-                <div className="grid grid-cols-2 divide-x divide-gray-100 min-h-full">
+                <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-100 min-h-full">
                   {/* Left: Chain-of-Thought Audit Trail */}
                   <div className="p-8">
                     <div className="flex items-center gap-2 mb-6">
@@ -174,9 +287,51 @@ export default function InboxPage() {
                   <div className="p-8">
                     <div className="flex items-center gap-2 mb-6">
                       <FileText size={14} className="text-gray-400" />
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Recommended Action</p>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">
+                        {isEmailDraft ? "Drafted Email" : "Recommended Action"}
+                      </p>
                     </div>
-                    {selected.payload.length === 0 ? (
+                    {isEmailDraft ? (
+                      <div className="rounded-[28px] border border-slate-200 bg-white shadow-sm overflow-hidden">
+                        <div className="px-6 py-5 border-b border-slate-100 bg-slate-50">
+                          <div className="flex items-center gap-2 mb-3">
+                            <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
+                              <Mail size={18} />
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">Outbound Email Draft</p>
+                              <p className="text-xs text-slate-500">Ready for review before sending</p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 text-sm">
+                            <div className="rounded-2xl bg-white border border-slate-200 px-4 py-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 mb-1">From</p>
+                              <p className="text-slate-700 break-words">{selectedEmailFrom || "CashPilot Finance Team"}</p>
+                            </div>
+                            <div className="rounded-2xl bg-white border border-slate-200 px-4 py-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 mb-1">To</p>
+                              <p className="text-slate-700 break-words">{selectedEmailTo || "Recipient pending"}</p>
+                            </div>
+                            <div className="rounded-2xl bg-white border border-slate-200 px-4 py-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 mb-1">Subject</p>
+                              <p className="text-slate-900 font-medium break-words">{selectedEmailSubject || "Subject pending"}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="px-6 py-6 bg-white">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 mb-4">Body</p>
+                          <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] px-5 py-5">
+                            <div className="space-y-4 text-sm leading-7 text-slate-700 whitespace-pre-wrap">
+                              {emailLines.map((line, idx) => (
+                                <p key={`${idx}-${line.slice(0, 12)}`} className={line ? "" : "h-4"}>
+                                  {line || " "}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : selected.payload.length === 0 ? (
                       <p className="text-xs text-gray-400 italic">No action payload recorded.</p>
                     ) : (
                       <div className="flex flex-col gap-3">
@@ -194,6 +349,16 @@ export default function InboxPage() {
 
               {/* Sticky footer */}
               <div className="px-8 py-5 border-t border-gray-100 bg-white flex gap-4">
+                {selected.canGenerateDrafts && !selected.hasCommunicationDraft && (
+                  <button
+                    onClick={() => generateDrafts(false)}
+                    disabled={isGeneratingDrafts}
+                    className="flex-1 py-3.5 rounded-2xl bg-indigo-500 hover:bg-indigo-600 disabled:bg-indigo-300 text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-sm"
+                  >
+                    <Mail size={17} />
+                    {isGeneratingDrafts ? "Generating..." : "Draft For This Problem"}
+                  </button>
+                )}
                 <button
                   onClick={() => dismiss(selected.id)}
                   className="flex-1 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-sm"

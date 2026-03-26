@@ -5,31 +5,132 @@ Objective: Minimize (late fees + goodwill damage)
 Constraints:
   - Balance >= 0 for all days
   - Tier 0 (locked) obligations MUST be paid (delay = 0)
+  - Tier 1: max 25% delay
+  - Tier 2: max 60% delay
+  - Tier 3+: max 100% delay
   - delay_i >= 0 for all obligations
 
 Uses scipy.optimize.linprog with the HiGHS solver.
+Falls back to a greedy best-effort strategy when LP is infeasible.
 
 ZERO AI/LLM - Pure math only.
 """
 
 from datetime import timedelta
-from typing import Dict
+from typing import Dict, List
 import numpy as np
 from scipy.optimize import linprog
 from core.db import get_db_connection
 
 
+# Tier-based constraints
+TIER_MAX_DELAY = {0: 0.0, 1: 0.25, 2: 0.60, 3: 1.0}
+TIER_LABELS = {0: "Locked", 1: "Penalty", 2: "Relational", 3: "Flexible"}
+
+
+def _get_tier(payable) -> int:
+    """Get effective tier for a payable, considering is_locked override."""
+    if payable['is_locked']:
+        return 0
+    return payable.get('ontology_tier', 3) or 3
+
+
+def _build_obligations_list(payables, delay_fractions, cost_vector) -> List[Dict]:
+    """Build the optimized obligations list from delay fractions."""
+    obligations = []
+    total_delayed = 0.0
+
+    for i, p in enumerate(payables):
+        frac = delay_fractions[i]
+        amount_abs = abs(float(p['amount']))
+        delay_amount = frac * amount_abs
+        tier = _get_tier(p)
+
+        if delay_amount > 0.01:
+            pay_now = amount_abs - delay_amount
+            delay_days = 7
+            due_date = p['due_date']
+
+            obligations.append({
+                "obligation_id": str(p['id']),
+                "entity_name": p['entity_name'],
+                "original_amount": float(p['amount']),
+                "original_due": due_date.isoformat(),
+                "strategy": "FRACTIONAL_PAYMENT" if frac < 0.99 else "FULL_DEFER",
+                "pay_now": round(pay_now, 2),
+                "delay_amount": round(delay_amount, 2),
+                "new_due_date": (due_date + timedelta(days=delay_days)).isoformat(),
+                "estimated_cost": round(cost_vector[i] * frac, 2),
+                "ontology_tier": tier,
+                "tier_label": TIER_LABELS.get(tier, "Flexible"),
+                "goodwill_score": p['goodwill_score'],
+                "max_allowed_delay_pct": int(TIER_MAX_DELAY.get(tier, 1.0) * 100),
+            })
+            total_delayed += delay_amount
+
+    return obligations, round(total_delayed, 2)
+
+
+def _greedy_best_effort(payables, cost_vector, shortfall) -> Dict:
+    """
+    When LP is infeasible, greedily delay obligations starting from
+    cheapest cost / highest tier (most flexible) first — up to tier max.
+    """
+    n = len(payables)
+    # Score: higher = better candidate for delaying (low cost, high tier)
+    scored = []
+    for i, p in enumerate(payables):
+        tier = _get_tier(p)
+        max_frac = TIER_MAX_DELAY.get(tier, 1.0)
+        amount_abs = abs(float(p['amount']))
+        cost_per_dollar = cost_vector[i] / max(amount_abs, 0.01)
+        # Priority: high tier first (more flexible), then low cost
+        priority = tier * 1000 - cost_per_dollar
+        scored.append((i, priority, max_frac, amount_abs))
+
+    # Sort by priority descending (most flexible, cheapest first)
+    scored.sort(key=lambda x: -x[1])
+
+    delay_fractions = np.zeros(n)
+    remaining_shortfall = shortfall
+
+    for idx, _, max_frac, amount_abs in scored:
+        if remaining_shortfall <= 0:
+            break
+        max_delay_amount = max_frac * amount_abs
+        actual_delay = min(max_delay_amount, remaining_shortfall)
+        if actual_delay > 0.01:
+            delay_fractions[idx] = actual_delay / amount_abs
+            remaining_shortfall -= actual_delay
+
+    obligations, total_delayed = _build_obligations_list(
+        payables, delay_fractions, cost_vector
+    )
+
+    covered_pct = round((1 - remaining_shortfall / max(shortfall, 0.01)) * 100, 1)
+
+    return {
+        "status": "PARTIAL_OPTIMIZATION",
+        "optimized_obligations": obligations,
+        "projected_savings": 0.0,
+        "breach_prevented": remaining_shortfall <= 0.01,
+        "total_delayed": total_delayed,
+        "shortfall": round(shortfall, 2),
+        "remaining_shortfall": round(max(remaining_shortfall, 0), 2),
+        "coverage_pct": covered_pct,
+        "chain_of_thought": [
+            {"label": "Detected Shortfall", "detail": f"Balance cannot cover ${round(shortfall, 2)} in upcoming obligations."},
+            {"label": "Tier Constraints Applied", "detail": "Tier 0 locked (0%), Tier 1 max 25%, Tier 2 max 60%, Tier 3 max 100%."},
+            {"label": "Best-Effort Strategy", "detail": f"Greedy deferral covers {covered_pct}% of shortfall (${round(total_delayed, 2)} deferred)."},
+            {"label": "Remaining Gap", "detail": f"${round(max(remaining_shortfall, 0), 2)} still uncovered — manual intervention needed." if remaining_shortfall > 0.01 else "Shortfall fully covered by deferrals."},
+        ]
+    }
+
+
 def optimize_payment_strategy(company_id: str) -> Dict:
     """
     Uses Linear Programming to find the optimal payment strategy.
-
-    Returns:
-        {
-            "status": str,
-            "optimized_obligations": List[Dict],
-            "projected_savings": float,
-            "breach_prevented": bool
-        }
+    Falls back to greedy best-effort if LP is infeasible.
     """
     conn = get_db_connection()
     if not conn:
@@ -72,13 +173,15 @@ def optimize_payment_strategy(company_id: str) -> Dict:
                 "status": "NO_OPTIMIZATION_NEEDED",
                 "optimized_obligations": [],
                 "projected_savings": 0.0,
-                "breach_prevented": False
+                "breach_prevented": False,
+                "chain_of_thought": [
+                    {"label": "Analysis", "detail": "No pending payables in the next 14 days."},
+                ]
             }
 
         n = len(payables)
 
         # Build cost vector (c): late_fee_rate * amount + goodwill_penalty
-        # Lower cost = preferred to delay (we're minimizing)
         c = []
         for p in payables:
             amount_abs = abs(float(p['amount']))
@@ -100,77 +203,50 @@ def optimize_payment_strategy(company_id: str) -> Dict:
                 "status": "NO_OPTIMIZATION_NEEDED",
                 "optimized_obligations": [],
                 "projected_savings": 0.0,
-                "breach_prevented": False
+                "breach_prevented": False,
+                "chain_of_thought": [
+                    {"label": "Analysis", "detail": f"Balance ${current_balance:,.2f} covers all ${total_payables:,.2f} in obligations."},
+                    {"label": "Result", "detail": "No payment deferrals needed."},
+                ]
             }
 
-        # Constraint: sum of delay amounts >= shortfall
+        # LP Constraint: sum(delay_i * amount_i) >= shortfall
         # Standard form: -sum(delay_i * amount_i) <= -shortfall
         A_ub = [[-abs(float(p['amount'])) for p in payables]]
         A_ub = np.array(A_ub)
         b_ub = np.array([-shortfall])
 
         # Bounds: ontology-tier-based delay limits
-        # Tier 0 (Locked):   0% delay (taxes, payroll — immovable)
-        # Tier 1 (Penalty):  up to 25% delay (carries late fees)
-        # Tier 2 (Relational): up to 60% delay (goodwill risk)
-        # Tier 3+ (Flexible): up to 100% delay (fully negotiable)
-        TIER_MAX_DELAY = {0: 0.0, 1: 0.25, 2: 0.60, 3: 1.0}
         bounds = []
         for p in payables:
-            tier = p.get('ontology_tier', 3) if not p['is_locked'] else 0
+            tier = _get_tier(p)
             max_delay = TIER_MAX_DELAY.get(tier, 1.0)
             bounds.append((0, max_delay))
 
-        # Solve
+        # Solve LP
         result = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
 
         if not result.success:
-            return {
-                "status": "OPTIMIZATION_FAILED",
-                "optimized_obligations": [],
-                "projected_savings": 0.0,
-                "breach_prevented": False,
-                "error": result.message
-            }
+            # LP is infeasible — use greedy best-effort instead
+            return _greedy_best_effort(payables, c, shortfall)
 
-        # Build optimized strategy
-        optimized_obligations = []
-        total_delayed = 0
-
-        TIER_LABELS = {0: "Locked", 1: "Penalty", 2: "Relational", 3: "Flexible"}
-        for i, p in enumerate(payables):
-            delay_fraction = result.x[i]
-            amount_abs = abs(float(p['amount']))
-            delay_amount = delay_fraction * amount_abs
-            tier = p.get('ontology_tier', 3) if not p['is_locked'] else 0
-
-            if delay_amount > 0.01:  # Threshold to avoid floating point noise
-                pay_now = amount_abs - delay_amount
-                delay_days = 7  # Default delay period
-
-                due_date = p['due_date']
-                optimized_obligations.append({
-                    "obligation_id": str(p['id']),
-                    "entity_name": p['entity_name'],
-                    "original_amount": float(p['amount']),
-                    "original_due": due_date.isoformat(),
-                    "strategy": "FRACTIONAL_PAYMENT",
-                    "pay_now": round(pay_now, 2),
-                    "delay_amount": round(delay_amount, 2),
-                    "new_due_date": (due_date + timedelta(days=delay_days)).isoformat(),
-                    "estimated_cost": round(c[i] * delay_fraction, 2),
-                    "ontology_tier": tier,
-                    "tier_label": TIER_LABELS.get(tier, "Flexible"),
-                    "goodwill_score": p['goodwill_score']
-                })
-                total_delayed += delay_amount
+        # LP succeeded — build optimized strategy
+        obligations, total_delayed = _build_obligations_list(
+            payables, result.x, c
+        )
 
         return {
             "status": "SUCCESS",
-            "optimized_obligations": optimized_obligations,
+            "optimized_obligations": obligations,
             "projected_savings": round(shortfall - result.fun, 2),
             "breach_prevented": True,
-            "total_delayed": round(total_delayed, 2)
+            "total_delayed": total_delayed,
+            "shortfall": round(shortfall, 2),
+            "chain_of_thought": [
+                {"label": "Detected Shortfall", "detail": f"${round(shortfall, 2)} gap between balance and obligations."},
+                {"label": "LP Solver", "detail": f"Optimized across {n} obligations respecting tier constraints."},
+                {"label": "Result", "detail": f"Deferred ${total_delayed} to prevent breach. Estimated penalty cost: ${round(result.fun, 2)}."},
+            ]
         }
 
     finally:

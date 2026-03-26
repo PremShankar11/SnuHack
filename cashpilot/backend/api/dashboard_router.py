@@ -4,9 +4,70 @@ from core.db import get_db_connection
 from quant.runway_engine import calculate_runway
 from quant.phantom_balance import calculate_phantom_balance
 from quant.optimizer import optimize_payment_strategy
+from quant.monte_carlo import run_monte_carlo_simulation
 import json
 
 router = APIRouter()
+
+
+def _normalize_chain_of_thought(cot) -> list[dict]:
+    steps = []
+
+    if isinstance(cot, str):
+        try:
+            cot = json.loads(cot)
+        except Exception:
+            return [{"label": "Reasoning", "detail": cot}]
+
+    if isinstance(cot, dict):
+        if isinstance(cot.get("steps"), list):
+            for i, item in enumerate(cot["steps"]):
+                if isinstance(item, dict):
+                    steps.append({
+                        "label": str(item.get("label", f"Step {i + 1}")),
+                        "detail": str(item.get("detail", "")),
+                    })
+                else:
+                    steps.append({"label": f"Step {i + 1}", "detail": str(item)})
+            return steps
+
+        for key, value in cot.items():
+            label = key.replace('_', ' ').title()
+            detail = str(value) if value is not None else "N/A"
+            steps.append({"label": label, "detail": detail})
+        return steps
+
+    if isinstance(cot, list):
+        for i, item in enumerate(cot):
+            if isinstance(item, dict):
+                steps.append({
+                    "label": str(item.get("label", f"Step {i + 1}")),
+                    "detail": str(item.get("detail", "")),
+                })
+            else:
+                steps.append({"label": f"Step {i + 1}", "detail": str(item)})
+
+    return steps
+
+
+def _normalize_payload(payload) -> tuple[list[dict], dict]:
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+
+    if not isinstance(payload, dict):
+        return [], {}
+
+    payload_steps = []
+    for key, value in payload.items():
+        if isinstance(value, (dict, list)):
+            continue
+        label = key.replace('_', ' ').title()
+        payload_steps.append({"label": label, "detail": str(value)})
+
+    return payload_steps, payload
 
 @router.get("/api/dashboard")
 def get_dashboard():
@@ -82,33 +143,25 @@ def get_inbox():
         
         # Format for UI
         formatted_logs = []
+        seen_draft_obligations = set()
         for log in logs:
+            payload_steps, raw_payload = _normalize_payload(log['execution_payload'])
+            obligation_id = raw_payload.get("obligation_id") if isinstance(raw_payload, dict) else None
+
             action_type_ui = "Payment Follow-up"
             if log['execution_type'] == 'SYSTEM_ALERT':
                 action_type_ui = "System Alert"
+            elif raw_payload.get("communication_draft"):
+                action_type_ui = "AI Email Draft"
+
+            if raw_payload.get("communication_draft") and obligation_id:
+                obligation_key = str(obligation_id)
+                if obligation_key in seen_draft_obligations:
+                    continue
+                seen_draft_obligations.add(obligation_key)
 
             # Normalize chain_of_thought into a consistent steps array
-            cot = log['chain_of_thought']
-            steps = []
-            if cot and isinstance(cot, dict):
-                # Convert each key-value pair into a step
-                for key, value in cot.items():
-                    label = key.replace('_', ' ').title()
-                    detail = str(value) if value is not None else "N/A"
-                    steps.append({"label": label, "detail": detail})
-            elif cot and isinstance(cot, str):
-                steps.append({"label": "Reasoning", "detail": cot})
-            elif cot and isinstance(cot, list):
-                for i, item in enumerate(cot):
-                    steps.append({"label": f"Step {i+1}", "detail": str(item)})
-
-            # Normalize payload into action details
-            payload = log['execution_payload']
-            payload_steps = []
-            if payload and isinstance(payload, dict):
-                for key, value in payload.items():
-                    label = key.replace('_', ' ').title()
-                    payload_steps.append({"label": label, "detail": str(value)})
+            steps = _normalize_chain_of_thought(log['chain_of_thought'])
 
             formatted_logs.append({
                 "id": str(log['id']),
@@ -117,7 +170,12 @@ def get_inbox():
                 "actionType": action_type_ui,
                 "summary": log['message'],
                 "chainOfThought": steps,
-                "payload": payload_steps
+                "payload": payload_steps,
+                "rawPayload": raw_payload,
+                "executionType": log['execution_type'],
+                "rawActionType": log['action_type'],
+                "canGenerateDrafts": log['execution_type'] == 'SYSTEM_ALERT',
+                "hasCommunicationDraft": bool(raw_payload.get("communication_draft")),
             })
             
         return {"inbox": formatted_logs}
@@ -133,11 +191,12 @@ def get_analytics():
 
     cur = conn.cursor()
     try:
-        cur.execute("SELECT plaid_current_balance, current_simulated_date FROM companies LIMIT 1;")
+        cur.execute("SELECT id, plaid_current_balance, current_simulated_date FROM companies LIMIT 1;")
         company = cur.fetchone()
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
 
+        company_id = str(company['id'])
         simulated_now = company['current_simulated_date']
         balance = float(company['plaid_current_balance'])
 
@@ -174,28 +233,44 @@ def get_analytics():
         cur.execute("SELECT name, goodwill_score FROM entities WHERE entity_type = 'VENDOR' ORDER BY ontology_tier ASC;")
         vendors = [{"name": v['name'], "goodwill": v['goodwill_score']} for v in cur.fetchall()]
 
-        # Monte Carlo stats from live obligations
-        cur.execute("SELECT COALESCE(SUM(amount), 0) as total FROM obligations WHERE status = 'PENDING' AND amount < 0;")
-        total_payables = abs(float(cur.fetchone()['total']))
+        # Real Monte Carlo simulation using quant module
+        try:
+            monte_carlo_data = run_monte_carlo_simulation(company_id, num_simulations=10000)
+        except Exception as e:
+            # Fallback to placeholder if Monte Carlo fails
+            print(f"Monte Carlo simulation failed: {e}")
+            cur.execute("SELECT COALESCE(SUM(amount), 0) as total FROM obligations WHERE status = 'PENDING' AND amount < 0;")
+            total_payables = abs(float(cur.fetchone()['total']))
+            cur.execute("SELECT COALESCE(SUM(amount), 0) as total FROM obligations WHERE status = 'PENDING' AND amount > 0;")
+            total_receivables = float(cur.fetchone()['total'])
+            
+            survival = min(100, max(0, int((balance / max(total_payables, 1)) * 100)))
+            monte_carlo_data = {
+                "simulations": 10000,
+                "survival_probability": survival,
+                "p10_balance": round(balance - total_payables * 1.3, 2),
+                "median_balance": round(balance - total_payables + total_receivables * 0.5, 2),
+                "p90_balance": round(balance + total_receivables - total_payables * 0.5, 2)
+            }
 
-        cur.execute("SELECT COALESCE(SUM(amount), 0) as total FROM obligations WHERE status = 'PENDING' AND amount > 0;")
-        total_receivables = float(cur.fetchone()['total'])
-
-        survival = min(100, max(0, int((balance / max(total_payables, 1)) * 100)))
-        p10_bear = round(balance - total_payables * 1.3, 2)
-        median = round(balance - total_payables + total_receivables * 0.5, 2)
-        p90_bull = round(balance + total_receivables - total_payables * 0.5, 2)
+        # LP Optimization data
+        try:
+            optimization_data = optimize_payment_strategy(company_id)
+        except Exception as e:
+            print(f"LP optimization failed: {e}")
+            optimization_data = {"status": "UNAVAILABLE", "optimized_obligations": []}
 
         return {
             "cashFlow": cash_flow,
             "vendors": vendors,
             "monteCarlo": {
-                "simulations": 10000,
-                "probability": survival,
-                "p10": p10_bear,
-                "median": median,
-                "p90": p90_bull
-            }
+                "simulations": monte_carlo_data.get("simulations", 10000),
+                "probability": monte_carlo_data.get("survival_probability", 0),
+                "p10": monte_carlo_data.get("p10_balance", 0),
+                "median": monte_carlo_data.get("median_balance", 0),
+                "p90": monte_carlo_data.get("p90_balance", 0)
+            },
+            "optimization": optimization_data
         }
     finally:
         cur.close()

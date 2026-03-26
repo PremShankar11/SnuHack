@@ -8,11 +8,24 @@ import {
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
 } from "recharts";
+import { Zap, Shield, CheckCircle2, AlertTriangle, Clock } from "lucide-react";
+
+function fmt(n: number) {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+const tierStyle: Record<number, { bg: string; text: string; label: string }> = {
+  0: { bg: "bg-red-100", text: "text-red-700", label: "Locked" },
+  1: { bg: "bg-amber-100", text: "text-amber-700", label: "Penalty" },
+  2: { bg: "bg-blue-100", text: "text-blue-700", label: "Relational" },
+  3: { bg: "bg-emerald-100", text: "text-emerald-700", label: "Flexible" },
+};
 
 type AnalyticsData = {
   cashFlow: { day: string; standard: number; phantom: number }[];
   vendors: { name: string; goodwill: number }[];
   monteCarlo: { simulations: number; probability: number; p10: number; median: number; p90: number };
+  optimization?: any;
 };
 
 export default function AnalyticsPage() {
@@ -50,11 +63,16 @@ export default function AnalyticsPage() {
     );
   }
 
-  const { cashFlow, monteCarlo, vendors } = data;
+  const { cashFlow, monteCarlo, vendors, optimization } = data;
   const radarData = vendors.map((v) => ({ vendor: v.name, score: v.goodwill }));
 
   // Check if breach occurs
   const hasLiquidityBreach = cashFlow.some(d => d.standard < 0 || d.phantom < 0);
+  
+  // Only show actionable vendors (those with delay_amount > 0)
+  const actionableVendors = optimization?.optimized_obligations?.filter(
+    (ob: any) => ob.delay_amount > 0
+  ) || [];
 
   return (
     <div className={`p-8 max-w-5xl mx-auto transition-opacity duration-300 ${isSimulating ? "opacity-60" : "opacity-100"}`}>
@@ -105,7 +123,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Monte Carlo + Goodwill Radar */}
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-2 gap-6 mb-6">
         {/* Monte Carlo */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 fade-in">
           <p className="text-sm font-semibold text-gray-800 mb-1">Monte Carlo Engine</p>
@@ -162,6 +180,135 @@ export default function AnalyticsPage() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* LP Optimization Strategy */}
+      {optimization && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 fade-in">
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center">
+                <Zap size={16} className="text-indigo-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-800">LP Optimization Strategy</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {optimization.status === "UNAVAILABLE"
+                    ? "Optimization engine unavailable"
+                    : optimization.status === "SUCCESS"
+                    ? `${actionableVendors.length} vendor${actionableVendors.length !== 1 ? "s" : ""} with recommended payment deferrals`
+                    : optimization.status === "NO_OPTIMIZATION_NEEDED"
+                    ? "All obligations covered — no optimization needed"
+                    : optimization.status === "OPTIMIZATION_FAILED"
+                    ? "Optimization computation failed"
+                    : "Computing optimization..."}
+                </p>
+              </div>
+            </div>
+            {optimization.status === "SUCCESS" && optimization.breach_prevented && (
+              <span className="text-[10px] bg-emerald-50 border border-emerald-200 text-emerald-600 font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide flex items-center gap-1">
+                <Shield size={10} /> Breach Prevented
+              </span>
+            )}
+          </div>
+
+          {optimization.status === "UNAVAILABLE" && (
+            <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-center gap-3">
+              <AlertTriangle size={16} className="text-gray-400 shrink-0" />
+              <p className="text-xs text-gray-600">
+                LP optimization engine is currently unavailable. Check backend logs for details.
+              </p>
+            </div>
+          )}
+
+          {optimization.status === "NO_OPTIMIZATION_NEEDED" && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 flex items-center gap-3">
+              <CheckCircle2 size={16} className="text-emerald-500 shrink-0" />
+              <p className="text-xs text-emerald-700">
+                Current balance fully covers all upcoming obligations within the 14-day horizon. No payment deferrals needed.
+              </p>
+            </div>
+          )}
+
+          {optimization.status === "OPTIMIZATION_FAILED" && (
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 flex items-center gap-3">
+              <AlertTriangle size={16} className="text-amber-500 shrink-0" />
+              <p className="text-xs text-amber-700">
+                Optimization failed: {optimization.error || "Unknown error"}
+              </p>
+            </div>
+          )}
+
+          {actionableVendors.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 mb-2">
+                <p className="text-xs text-indigo-700">
+                  <span className="font-semibold">Linear Programming Solution:</span> Minimizes late fees + goodwill damage 
+                  while maintaining positive cash balance. Tier-based constraints ensure critical obligations (taxes, payroll) are never delayed.
+                </p>
+              </div>
+
+              {actionableVendors.map((ob: any, idx: number) => {
+                const ts = tierStyle[ob.ontology_tier] || tierStyle[3];
+                return (
+                  <div key={ob.obligation_id || idx} className="bg-gray-50 rounded-xl border border-gray-100 px-5 py-4">
+                    {/* Vendor info */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-800">{ob.entity_name}</p>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${ts.bg} ${ts.text} uppercase tracking-wide`}>
+                          Tier {ob.ontology_tier} · {ts.label}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400">
+                        Goodwill: {ob.goodwill_score ?? "N/A"}/100
+                      </p>
+                    </div>
+
+                    {/* Payment strategy */}
+                    <div className="grid grid-cols-4 gap-3">
+                      <div className="bg-white rounded-lg p-3 text-center border border-gray-200">
+                        <p className="text-[9px] text-gray-400 mb-1 uppercase tracking-wide">Original Amount</p>
+                        <p className="text-sm font-bold text-gray-700">{fmt(Math.abs(ob.original_amount))}</p>
+                      </div>
+                      <div className="bg-emerald-50 rounded-lg p-3 text-center border border-emerald-200">
+                        <p className="text-[9px] text-emerald-600 mb-1 uppercase tracking-wide">Pay Now</p>
+                        <p className="text-sm font-bold text-emerald-700">{fmt(ob.pay_now)}</p>
+                      </div>
+                      <div className="bg-amber-50 rounded-lg p-3 text-center border border-amber-200">
+                        <p className="text-[9px] text-amber-600 mb-1 uppercase tracking-wide">Delay</p>
+                        <p className="text-sm font-bold text-amber-700">{fmt(ob.delay_amount)}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
+                        <p className="text-[9px] text-gray-400 mb-1 uppercase tracking-wide flex items-center justify-center gap-0.5">
+                          <Clock size={8} /> New Due
+                        </p>
+                        <p className="text-xs font-semibold text-gray-600">{new Date(ob.new_due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-2 text-xs text-gray-500">
+                      Original due: {new Date(ob.original_due).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · 
+                      Est. cost: {fmt(ob.estimated_cost)}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Summary footer */}
+              {optimization.total_delayed > 0 && (
+                <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 mt-1">
+                  <p className="text-xs text-indigo-700 font-medium">
+                    Total deferred: <span className="font-bold">{fmt(optimization.total_delayed)}</span>
+                  </p>
+                  <p className="text-xs text-indigo-500">
+                    Projected savings: {fmt(optimization.projected_savings)} vs. full penalties
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
