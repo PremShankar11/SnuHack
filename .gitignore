@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+cashpilot/node_modules/
+
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables (Crucial for security!)
+.env
+.env.local
+
+# Build outputs
+dist/
+build/
+
+# Next.js build and cache
+.next/
+cashpilot/.next/
+out/
+
+# Turbopack cache
+.turbo/
+
+.next/
+node_modules/
+*.sst
+*.log
