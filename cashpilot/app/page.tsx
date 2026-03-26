@@ -55,6 +55,7 @@ export default function DashboardPage() {
   const { simulatedDate, refreshKey } = useSimulation();
   const [data, setData] = useState<any>(null);
   const [monteCarlo, setMonteCarlo] = useState<any>(null);
+  const [runwayData, setRunwayData] = useState<any>(null);
   const [boardReport, setBoardReport] = useState<any>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -66,7 +67,10 @@ export default function DashboardPage() {
   useEffect(() => {
     async function fetchDashboard() {
       try {
-        const res = await fetch("http://localhost:8000/api/dashboard");
+        const res = await fetch(`http://localhost:8000/api/dashboard?refresh=${refreshKey}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
         if (res.ok) {
           const json = await res.json();
           setData(json);
@@ -82,7 +86,10 @@ export default function DashboardPage() {
     
     async function fetchMonteCarlo() {
       try {
-        const res = await fetch("http://localhost:8000/api/quant/monte-carlo");
+        const res = await fetch(`http://localhost:8000/api/quant/monte-carlo?refresh=${refreshKey}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
         if (res.ok) {
           const json = await res.json();
           setMonteCarlo(json);
@@ -93,9 +100,27 @@ export default function DashboardPage() {
 
       setMonteCarlo(buildMonteCarloFallback());
     }
-    
+
+    async function fetchRunway() {
+      try {
+        const res = await fetch(`http://localhost:8000/api/quant/runway?refresh=${refreshKey}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          setRunwayData(json);
+          return;
+        }
+      } catch {
+      }
+
+      setRunwayData(null);
+    }
+
     fetchDashboard();
     fetchMonteCarlo();
+    fetchRunway();
   }, [refreshKey]);
 
   async function generateBoardReport() {
@@ -157,7 +182,16 @@ export default function DashboardPage() {
   if (!data) return <div className="p-8"><div className="shimmer h-40 rounded-2xl" /></div>;
 
   const { vitals, sparkline, actions, optimization } = data;
-  const runwayDanger = vitals.daysToZero < 14;
+  const effectiveDaysToZero = typeof runwayData?.days_to_zero === "number"
+    ? runwayData.days_to_zero
+    : vitals.daysToZero;
+  const effectiveSparkline = Array.isArray(runwayData?.daily_projection) && runwayData.daily_projection.length > 0
+    ? runwayData.daily_projection.slice(0, 14).map((entry: any) => ({
+        day: entry.date,
+        phantom: entry.balance,
+      }))
+    : sparkline;
+  const runwayDanger = effectiveDaysToZero < 14;
   const urgentActions = actions.slice(0, 2);
 
   // Only show actionable vendors (those with delay_amount > 0)
@@ -286,7 +320,7 @@ export default function DashboardPage() {
         <div className={`bg-white rounded-2xl border shadow-sm p-6 ${runwayDanger ? "border-red-200" : "border-gray-200"}`}>
           <p className="text-xs font-medium text-gray-400 uppercase tracking-widest mb-3">Days to Zero (Runway)</p>
           <p className={`text-3xl font-black ${runwayDanger ? "text-red-500" : "text-gray-800"}`}>
-            {vitals.daysToZero} Days
+            {effectiveDaysToZero} Days
           </p>
           {runwayDanger && (
             <p className="text-xs text-red-500 mt-2 flex items-center gap-1 font-semibold">
@@ -308,7 +342,7 @@ export default function DashboardPage() {
             {runwayDanger && <TrendingDown size={16} className="text-red-400" />}
           </div>
           <ResponsiveContainer width="100%" height={120}>
-            <AreaChart data={sparkline} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <AreaChart data={effectiveSparkline} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="phantomGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#10b981" stopOpacity={0.15} />
