@@ -53,6 +53,16 @@ class BoardReportRequest(BaseModel):
     company_id: Optional[str] = None
 
 
+class Defcon1Request(BaseModel):
+    company_id: Optional[str] = None
+    force: bool = False
+    test_mode: bool = False
+    test_company_name: str = "CashPilot Demo Co"
+    test_days_to_zero: int = 2
+    test_breach_label: str = "Friday"
+    test_liquidation_amount: float = 2000.0
+
+
 # ── Helper ──────────────────────────────────────────────────────
 
 def _log_action_to_database(action: dict):
@@ -325,6 +335,44 @@ def generate_board_report(request: BoardReportRequest):
         from ai.board_report import generate_board_report_payload
 
         return generate_board_report_payload(request.company_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/ai/defcon1-whatsapp")
+def trigger_defcon1_whatsapp(request: Defcon1Request):
+    """Trigger the Defcon 1 WhatsApp escalation manually or for testing."""
+    try:
+        from services.whatsapp_escalation import maybe_send_defcon1_whatsapp, send_test_defcon1_whatsapp
+
+        company_id = request.company_id
+        if request.test_mode:
+            return send_test_defcon1_whatsapp(
+                company_id=company_id,
+                company_name=request.test_company_name,
+                days_to_zero=request.test_days_to_zero,
+                breach_label=request.test_breach_label,
+                liquidation_amount=request.test_liquidation_amount,
+            )
+
+        if not company_id:
+            conn = get_db_connection()
+            if not conn:
+                raise HTTPException(status_code=500, detail="Database connection failed")
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM companies LIMIT 1;")
+            company = cur.fetchone()
+            cur.close()
+            conn.close()
+            if not company:
+                raise HTTPException(status_code=404, detail="Company not found")
+            company_id = str(company["id"])
+
+        return maybe_send_defcon1_whatsapp(company_id, force=request.force)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

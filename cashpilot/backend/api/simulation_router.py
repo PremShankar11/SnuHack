@@ -220,6 +220,17 @@ def advance_simulation(request: AdvanceRequest):
                 )
 
         conn.commit()
+
+        escalation = None
+        try:
+            from services.whatsapp_escalation import maybe_send_defcon1_whatsapp
+
+            escalation = maybe_send_defcon1_whatsapp(str(company_id))
+        except Exception as escalation_error:
+            escalation = {
+                "triggered": False,
+                "reason": f"Escalation failed: {escalation_error}",
+            }
         
         return {
             "message": "Simulation advanced",
@@ -229,7 +240,8 @@ def advance_simulation(request: AdvanceRequest):
             "new_obligations": new_obligations,
             "breach_detected": breach_detected,
             "phantom_balance": phantom_balance,
-            "goodwill_updates": len(goodwill_changes)
+            "goodwill_updates": len(goodwill_changes),
+            "defcon1_escalation": escalation,
         }
     except Exception as e:
         conn.rollback()

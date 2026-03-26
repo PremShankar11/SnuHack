@@ -59,6 +59,9 @@ export default function DashboardPage() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [usingFallbackData, setUsingFallbackData] = useState(false);
+  const [whatsAppTestLoading, setWhatsAppTestLoading] = useState(false);
+  const [whatsAppTestResult, setWhatsAppTestResult] = useState<any>(null);
+  const [whatsAppTestError, setWhatsAppTestError] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchDashboard() {
@@ -117,6 +120,37 @@ export default function DashboardPage() {
       setReportError(message);
     } finally {
       setReportLoading(false);
+    }
+  }
+
+  async function sendTestWhatsApp() {
+    setWhatsAppTestLoading(true);
+    setWhatsAppTestError(null);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/ai/defcon1-whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          test_mode: true,
+          test_company_name: "CashPilot Demo Co",
+          test_days_to_zero: 2,
+          test_breach_label: "Friday",
+          test_liquidation_amount: 2000,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.detail || "Failed to send test WhatsApp alert.");
+      }
+
+      setWhatsAppTestResult(json);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to send test WhatsApp alert.";
+      setWhatsAppTestError(message);
+    } finally {
+      setWhatsAppTestLoading(false);
     }
   }
 
@@ -192,6 +226,40 @@ export default function DashboardPage() {
             <div className="whitespace-pre-wrap text-sm leading-7 text-slate-100">
               {boardReport.report}
             </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mb-8 rounded-2xl border border-emerald-200 bg-white p-6 shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div className="max-w-2xl">
+            <p className="text-sm font-semibold text-gray-900">Defcon 1 WhatsApp Test</p>
+            <p className="mt-1 text-sm leading-6 text-gray-600">
+              Sends a sample escalation using test data: runway 2 days, payroll shortfall by Friday, and a $2,000 Shopify liquidation prompt.
+            </p>
+          </div>
+          <button
+            onClick={sendTestWhatsApp}
+            disabled={whatsAppTestLoading}
+            className="shrink-0 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {whatsAppTestLoading ? "Sending..." : "Send Test WhatsApp"}
+          </button>
+        </div>
+
+        {whatsAppTestError && (
+          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {whatsAppTestError}
+          </div>
+        )}
+
+        {whatsAppTestResult && (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
+            <p className="font-semibold">Last test payload</p>
+            <p className="mt-2 whitespace-pre-wrap leading-6">{whatsAppTestResult.message}</p>
+            <p className="mt-3 text-xs text-emerald-700">
+              Delivery: {whatsAppTestResult.delivery?.provider || "Unknown"} / {whatsAppTestResult.delivery?.status || "Unknown"}
+            </p>
           </div>
         )}
       </div>

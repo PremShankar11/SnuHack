@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-import json
+import traceback
 from services.ingestion_pipeline import parse_receipt_image, reconcile_receipt
 
 router = APIRouter()
@@ -11,7 +11,7 @@ async def ingest_receipt(file: UploadFile = File(...)):
     1. Parses the image using Gemini 1.5 Pro.
     2. Runs N-Way Reconciliation on the extracted data.
     """
-    if not file.content_type.startswith("image/"):
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image.")
         
     try:
@@ -30,6 +30,9 @@ async def ingest_receipt(file: UploadFile = File(...)):
         }
         
     except ValueError as ve:
+        print(f"[ingest_receipt] ValueError: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        print("[ingest_receipt] Unexpected error:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

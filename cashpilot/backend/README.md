@@ -29,7 +29,14 @@ pip install fastapi uvicorn python-multipart psycopg2-binary rapidfuzz google-ge
    ```env
    DATABASE_URL=postgresql://postgres:user@host:5432/postgres
    GEMINI_API_KEY=your_gemini_api_key_here
+   WHATSAPP_MOCK_MODE=true
+   TWILIO_ACCOUNT_SID=your_twilio_sid_here
+   TWILIO_AUTH_TOKEN=your_twilio_auth_token_here
+   TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+   TWILIO_WHATSAPP_TO=whatsapp:+15551234567
    ```
+
+If Twilio credentials are missing, the Defcon 1 escalation automatically falls back to mock mode and still logs the WhatsApp payload into `action_logs`.
 
 ## Running the Data Scripts
 
