@@ -170,12 +170,15 @@ def parse_receipt_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> di
             "reconciliation_confidence": 0.95
         }
     }
-    Rules:
-    - Use the merchant or vendor name for entity_name.
-    - Use the final total or amount due for amount.
-    - Use a negative amount for expenses/payables and positive for receivables.
-    - If no due date exists on the receipt, use the transaction/receipt date. If no date is visible, use today's best estimate.
-    - raw_text_reference should contain the OCR text you relied on.
+    
+    CRITICAL RULES:
+    - Use the merchant or vendor name for entity_name
+    - For INVOICES/BILLS/RECEIPTS showing money PAID or OWED: amount MUST be NEGATIVE (e.g., -123.45)
+    - For INCOME/RECEIVABLES (money coming to you): amount should be positive
+    - Use the final total or amount due for amount
+    - If no due date exists, use the transaction/receipt date. If no date visible, use today's date
+    - raw_text_reference should contain the OCR text you relied on
+    - Return ONLY valid JSON, no markdown code blocks
     '''
     image_parts = [
         {
@@ -189,7 +192,12 @@ def parse_receipt_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> di
         parsed = json.loads(_strip_markdown_fence(response.text))
         return _normalize_parsed_receipt(parsed)
     except Exception as e:
-        print("Failed to parse Gemini output:", response.text)
+        error_msg = str(e)
+        print("Failed to parse Gemini output:", response.text if hasattr(response, 'text') else error_msg)
+        
+        # Check if it's a quota error
+        if "429" in error_msg or "quota" in error_msg.lower():
+            raise ValueError(f"Gemini API quota exceeded. Please wait a few minutes or upgrade your API plan.")
         raise e
 
 
