@@ -105,6 +105,21 @@ def _receivable_acceleration_subject(context: dict) -> str:
     )
 
 
+def _template_debt_netting(context: dict) -> str:
+    return (
+        f"Dear {context['counterparty_name']},\n\n"
+        f"Our ledger shows that we currently owe you ${context['payable_total']:,.2f}, while you owe us "
+        f"${context['receivable_total']:,.2f}. Rather than moving funds in both directions, we'd like to net the balances.\n\n"
+        f"After netting, we would wire ${context['settlement_payment']:,.2f} to settle both ledgers in full.\n\n"
+        f"Please confirm and we will process the settlement today.\n\n"
+        f"Best regards,\nCashPilot Finance Team"
+    )
+
+
+def _debt_netting_subject(context: dict) -> str:
+    return f"Proposal to net mutual balances with {context['counterparty_name']}"
+
+
 def generate_payment_delay_action(
     obligation_id: str,
     delay_days: int,
@@ -321,3 +336,79 @@ Draft the email body only (no subject line):"""
     finally:
         cur.close()
         conn.close()
+
+
+def generate_debt_netting_action(netting_key: str, company_id: Optional[str] = None) -> Dict:
+    """
+    Draft a debt netting proposal when the same counterparty is both a vendor and client.
+    """
+    from quant.optimizer import optimize_payment_strategy
+
+    if not company_id:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM companies LIMIT 1;")
+        company = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not company:
+            raise ValueError("Company not found")
+        company_id = str(company["id"])
+
+    optimization = optimize_payment_strategy(company_id)
+    opportunity = next(
+        (item for item in optimization.get("netting_opportunities", []) if item.get("netting_key") == netting_key),
+        None,
+    )
+    if not opportunity:
+        raise ValueError(f"Debt netting opportunity '{netting_key}' not found")
+
+    context = {
+        "counterparty_name": opportunity["entity_name"],
+        "payable_total": float(opportunity["payable_total"]),
+        "receivable_total": float(opportunity["receivable_total"]),
+        "nettable_amount": float(opportunity["nettable_amount"]),
+        "settlement_payment": float(opportunity["settlement_payment"]),
+    }
+
+    prompt = f"""You are a finance operations specialist. Draft a concise, professional email proposing debt netting with a counterparty.
+
+Context:
+- Counterparty: {context['counterparty_name']}
+- We owe them: ${context['payable_total']:,.2f}
+- They owe us: ${context['receivable_total']:,.2f}
+- Nettable amount: ${context['nettable_amount']:,.2f}
+- Settlement wire after netting: ${context['settlement_payment']:,.2f}
+
+Requirements:
+1. Keep it under 140 words
+2. Explain that mutual balances can be netted to avoid unnecessary fund transfers
+3. State the exact final settlement amount
+4. Ask for confirmation to settle both ledgers today
+
+Draft the email body only (no subject line):"""
+
+    draft = _generate_with_gemini(prompt)
+    if not draft:
+        draft = _template_debt_netting(context)
+
+    chain_of_thought = [
+        {"label": "Counterparty Match", "detail": f"{context['counterparty_name']} appears as both vendor and client in the ledger."},
+        {"label": "Mutual Exposure", "detail": f"We owe ${context['payable_total']:,.2f}; they owe us ${context['receivable_total']:,.2f}."},
+        {"label": "Netting Benefit", "detail": f"Netting clears ${context['nettable_amount']:,.2f} without cash moving in both directions."},
+        {"label": "Settlement", "detail": f"Proposed final wire is ${context['settlement_payment']:,.2f} to settle both ledgers."},
+    ]
+
+    return {
+        "action_type": "DEBT_NETTING",
+        "netting_key": netting_key,
+        "entity_name": context["counterparty_name"],
+        "communication_draft": draft,
+        "email_from": "CashPilot Finance Team <admin@cashpilot.ai>",
+        "email_to": f"Finance Team, {context['counterparty_name']}",
+        "email_subject": _debt_netting_subject(context),
+        "email_body": draft,
+        "chain_of_thought": chain_of_thought,
+        "requires_approval": True,
+        "context": context,
+    }

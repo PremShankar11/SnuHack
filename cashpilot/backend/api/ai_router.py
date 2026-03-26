@@ -49,6 +49,11 @@ class AutoGenerateRequest(BaseModel):
     generate_all: bool = False
 
 
+class DebtNettingRequest(BaseModel):
+    netting_key: str
+    company_id: Optional[str] = None
+
+
 class BoardReportRequest(BaseModel):
     company_id: Optional[str] = None
 
@@ -183,6 +188,31 @@ def _draft_exists_for_obligation(company_id: str, obligation_id: str) -> bool:
             LIMIT 1;
             """,
             (company_id, obligation_id),
+        )
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _draft_exists_for_netting_key(company_id: str, netting_key: str) -> bool:
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 1
+            FROM action_logs
+            WHERE company_id = %s
+              AND is_resolved = FALSE
+              AND action_type = 'DEBT_NETTING'
+              AND execution_payload->>'netting_key' = %s
+            LIMIT 1;
+            """,
+            (company_id, netting_key),
         )
         return cur.fetchone() is not None
     finally:
@@ -328,6 +358,21 @@ def get_pending_ai_actions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/api/ai/generate-debt-netting")
+def generate_debt_netting(request: DebtNettingRequest):
+    """Generate a debt netting settlement email using Gemini + log to DB."""
+    try:
+        from ai.action_generator import generate_debt_netting_action
+
+        action = generate_debt_netting_action(request.netting_key, request.company_id)
+        _log_action_to_database(action)
+        return action
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/ai/generate-board-report")
 def generate_board_report(request: BoardReportRequest):
     """Generate a one-click investor update from dashboard state + recent AI actions."""
@@ -402,19 +447,20 @@ def auto_generate_actions(request: AutoGenerateRequest):
         company_id = str(company["id"])
         optimization = optimize_payment_strategy(company_id)
 
-        from ai.action_generator import generate_payment_delay_action
+        from ai.action_generator import generate_debt_netting_action, generate_payment_delay_action
 
         candidate_obligations = [
             ob for ob in optimization.get("optimized_obligations", [])
             if ob.get("delay_amount", 0) > 0.01
         ]
+        netting_candidates = list(optimization.get("netting_opportunities", []))
         used_fallback = False
 
-        if not candidate_obligations:
+        if not candidate_obligations and not netting_candidates:
             candidate_obligations = _fallback_draft_candidates(company_id)
             used_fallback = len(candidate_obligations) > 0
 
-        if not candidate_obligations:
+        if not candidate_obligations and not netting_candidates:
             return {
                 "message": "No draft candidates found",
                 "optimization_status": optimization.get("status", "UNKNOWN"),
@@ -423,23 +469,39 @@ def auto_generate_actions(request: AutoGenerateRequest):
                 "errors": [],
             }
 
+        candidates = [
+            {"kind": "netting", "data": item}
+            for item in netting_candidates
+        ] + [
+            {"kind": "payment_delay", "data": item}
+            for item in candidate_obligations
+        ]
+
         if not request.generate_all:
-            candidate_obligations = candidate_obligations[:1]
+            candidates = candidates[:1]
 
         generated = []
         errors = []
-        for ob in candidate_obligations:
+        for candidate in candidates:
             try:
-                if _draft_exists_for_obligation(company_id, ob["obligation_id"]):
-                    errors.append(f"{ob.get('entity_name', 'Unknown')}: draft already exists")
-                    continue
+                if candidate["kind"] == "netting":
+                    item = candidate["data"]
+                    if _draft_exists_for_netting_key(company_id, item["netting_key"]):
+                        errors.append(f"{item.get('entity_name', 'Unknown')}: debt netting draft already exists")
+                        continue
+                    action = generate_debt_netting_action(item["netting_key"], company_id)
+                else:
+                    ob = candidate["data"]
+                    if _draft_exists_for_obligation(company_id, ob["obligation_id"]):
+                        errors.append(f"{ob.get('entity_name', 'Unknown')}: draft already exists")
+                        continue
 
-                pay_now = ob.get("pay_now")
-                action = generate_payment_delay_action(
-                    ob["obligation_id"],
-                    delay_days=7,
-                    fractional_payment=pay_now if pay_now and pay_now > 0 else None,
-                )
+                    pay_now = ob.get("pay_now")
+                    action = generate_payment_delay_action(
+                        ob["obligation_id"],
+                        delay_days=7,
+                        fractional_payment=pay_now if pay_now and pay_now > 0 else None,
+                    )
                 action["source_action_id"] = request.source_action_id
                 action["generation_scope"] = "all" if request.generate_all else "single"
                 _log_action_to_database(action)
@@ -449,7 +511,8 @@ def auto_generate_actions(request: AutoGenerateRequest):
                     "tone": action.get("tone"),
                 })
             except Exception as e:
-                entity_name = ob.get("entity_name", "Unknown")
+                item = candidate["data"]
+                entity_name = item.get("entity_name", "Unknown")
                 error_message = f"{entity_name}: {str(e)}"
                 print(f"Failed to generate action for {entity_name}: {e}")
                 errors.append(error_message)

@@ -21,11 +21,72 @@ from typing import Dict, List
 import numpy as np
 from scipy.optimize import linprog
 from core.db import get_db_connection
+import re
 
 
 # Tier-based constraints
 TIER_MAX_DELAY = {0: 0.0, 1: 0.25, 2: 0.60, 3: 1.0}
 TIER_LABELS = {0: "Locked", 1: "Penalty", 2: "Relational", 3: "Flexible"}
+
+
+def _normalize_entity_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def _find_netting_opportunities(rows: List[Dict]) -> tuple[List[Dict], float]:
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        key = _normalize_entity_name(row["entity_name"])
+        if not key:
+            continue
+        bucket = grouped.setdefault(
+            key,
+            {
+                "entity_name": row["entity_name"],
+                "payables": [],
+                "receivables": [],
+            },
+        )
+        amount = float(row["amount"])
+        item = {
+            "obligation_id": str(row["id"]),
+            "amount": amount,
+            "due_date": row["due_date"].isoformat(),
+            "entity_name": row["entity_name"],
+        }
+        if amount < 0:
+            bucket["payables"].append(item)
+        elif amount > 0:
+            bucket["receivables"].append(item)
+
+    opportunities = []
+    total_netting = 0.0
+    for key, bucket in grouped.items():
+        if not bucket["payables"] or not bucket["receivables"]:
+            continue
+
+        payable_total = round(sum(abs(item["amount"]) for item in bucket["payables"]), 2)
+        receivable_total = round(sum(item["amount"] for item in bucket["receivables"]), 2)
+        nettable_amount = round(min(payable_total, receivable_total), 2)
+        settlement_payment = round(max(payable_total - receivable_total, 0), 2)
+
+        opportunities.append(
+            {
+                "netting_key": key,
+                "entity_name": bucket["entity_name"],
+                "payable_total": payable_total,
+                "receivable_total": receivable_total,
+                "nettable_amount": nettable_amount,
+                "settlement_payment": settlement_payment,
+                "payables": bucket["payables"],
+                "receivables": bucket["receivables"],
+                "strategy": "DEBT_NETTING",
+            }
+        )
+        total_netting += nettable_amount
+
+    opportunities.sort(key=lambda item: item["nettable_amount"], reverse=True)
+    return opportunities, round(total_netting, 2)
 
 
 def _get_tier(payable) -> int:
@@ -71,7 +132,7 @@ def _build_obligations_list(payables, delay_fractions, cost_vector) -> List[Dict
     return obligations, round(total_delayed, 2)
 
 
-def _greedy_best_effort(payables, cost_vector, shortfall) -> Dict:
+def _greedy_best_effort(payables, cost_vector, shortfall, netting_opportunities=None, total_netting: float = 0.0) -> Dict:
     """
     When LP is infeasible, greedily delay obligations starting from
     cheapest cost / highest tier (most flexible) first — up to tier max.
@@ -112,6 +173,8 @@ def _greedy_best_effort(payables, cost_vector, shortfall) -> Dict:
     return {
         "status": "PARTIAL_OPTIMIZATION",
         "optimized_obligations": obligations,
+        "netting_opportunities": netting_opportunities or [],
+        "total_netting": round(total_netting, 2),
         "projected_savings": 0.0,
         "breach_prevented": remaining_shortfall <= 0.01,
         "total_delayed": total_delayed,
@@ -168,14 +231,31 @@ def optimize_payment_strategy(company_id: str) -> Dict:
         )
         payables = cur.fetchall()
 
+        cur.execute(
+            """
+            SELECT o.id, o.amount, o.due_date, e.name AS entity_name
+            FROM obligations o
+            JOIN entities e ON o.entity_id = e.id
+            WHERE o.status = 'PENDING'
+              AND o.due_date > %s AND o.due_date <= %s
+            ORDER BY o.due_date;
+            """,
+            (simulated_now, horizon),
+        )
+        counterparty_rows = cur.fetchall()
+        netting_opportunities, total_netting = _find_netting_opportunities(counterparty_rows)
+
         if not payables:
             return {
                 "status": "NO_OPTIMIZATION_NEEDED",
                 "optimized_obligations": [],
+                "netting_opportunities": netting_opportunities,
+                "total_netting": total_netting,
                 "projected_savings": 0.0,
                 "breach_prevented": False,
                 "chain_of_thought": [
                     {"label": "Analysis", "detail": "No pending payables in the next 14 days."},
+                    {"label": "Debt Netting", "detail": f"Found {len(netting_opportunities)} netting opportunities worth ${total_netting:,.2f}."},
                 ]
             }
 
@@ -196,16 +276,20 @@ def optimize_payment_strategy(company_id: str) -> Dict:
 
         # Calculate shortfall
         total_payables = sum(abs(float(p['amount'])) for p in payables)
-        shortfall = max(0, total_payables - current_balance)
+        shortfall_before_netting = max(0, total_payables - current_balance)
+        shortfall = max(0, shortfall_before_netting - total_netting)
 
         if shortfall == 0:
             return {
                 "status": "NO_OPTIMIZATION_NEEDED",
                 "optimized_obligations": [],
+                "netting_opportunities": netting_opportunities,
+                "total_netting": total_netting,
                 "projected_savings": 0.0,
                 "breach_prevented": False,
                 "chain_of_thought": [
-                    {"label": "Analysis", "detail": f"Balance ${current_balance:,.2f} covers all ${total_payables:,.2f} in obligations."},
+                    {"label": "Analysis", "detail": f"Balance ${current_balance:,.2f} plus ${total_netting:,.2f} of debt netting covers all ${total_payables:,.2f} in obligations."},
+                    {"label": "Debt Netting", "detail": f"Found {len(netting_opportunities)} netting opportunities worth ${total_netting:,.2f}."},
                     {"label": "Result", "detail": "No payment deferrals needed."},
                 ]
             }
@@ -228,7 +312,13 @@ def optimize_payment_strategy(company_id: str) -> Dict:
 
         if not result.success:
             # LP is infeasible — use greedy best-effort instead
-            return _greedy_best_effort(payables, c, shortfall)
+            return _greedy_best_effort(
+                payables,
+                c,
+                shortfall,
+                netting_opportunities=netting_opportunities,
+                total_netting=total_netting,
+            )
 
         # LP succeeded — build optimized strategy
         obligations, total_delayed = _build_obligations_list(
@@ -238,12 +328,16 @@ def optimize_payment_strategy(company_id: str) -> Dict:
         return {
             "status": "SUCCESS",
             "optimized_obligations": obligations,
+            "netting_opportunities": netting_opportunities,
+            "total_netting": total_netting,
             "projected_savings": round(shortfall - result.fun, 2),
             "breach_prevented": True,
             "total_delayed": total_delayed,
             "shortfall": round(shortfall, 2),
+            "shortfall_before_netting": round(shortfall_before_netting, 2),
             "chain_of_thought": [
-                {"label": "Detected Shortfall", "detail": f"${round(shortfall, 2)} gap between balance and obligations."},
+                {"label": "Detected Shortfall", "detail": f"${round(shortfall_before_netting, 2)} raw gap between balance and obligations."},
+                {"label": "Debt Netting", "detail": f"Matched {len(netting_opportunities)} counterparties for ${total_netting:,.2f} of free netting, reducing the optimization gap to ${round(shortfall, 2)}."},
                 {"label": "LP Solver", "detail": f"Optimized across {n} obligations respecting tier constraints."},
                 {"label": "Result", "detail": f"Deferred ${total_delayed} to prevent breach. Estimated penalty cost: ${round(result.fun, 2)}."},
             ]

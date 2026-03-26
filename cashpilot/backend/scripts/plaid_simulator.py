@@ -195,7 +195,21 @@ def generate_simulator_data():
         # These are what the simulation slider processes
         # ──────────────────────────────────────────────
         print("Phase 2: Generating future obligations (Today to +30 days)...")
-        
+
+        acme_vendor = next((e for e in vendors if e["name"] == "Acme Supplies"), None)
+        acme_client = next((e for e in clients if e["name"] == "Acme Supplies"), None)
+        if acme_vendor and acme_client:
+            cur.execute(
+                "INSERT INTO obligations (entity_id, amount, due_date, status, is_locked) "
+                "VALUES (%s, %s, %s, 'PENDING', FALSE);",
+                (acme_vendor["id"], -1000.0, today + timedelta(days=4))
+            )
+            cur.execute(
+                "INSERT INTO obligations (entity_id, amount, due_date, status, is_locked) "
+                "VALUES (%s, %s, %s, 'PENDING', FALSE);",
+                (acme_client["id"], 400.0, today + timedelta(days=6))
+            )
+
         for day_offset in range(1, 31):
             future_date = today + timedelta(days=day_offset)
             dom = future_date.day

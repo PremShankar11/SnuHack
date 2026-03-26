@@ -48,6 +48,7 @@ def seed_database():
             (company_id, "HubSpot", "VENDOR", 3, 100, 0.00, 4),
 
             # Clients (Inflow Receivables)
+            (company_id, "Acme Supplies", "CLIENT", 2, 98, 0.00, 4),
             (company_id, "Shopify Sales", "CLIENT", 3, 100, 0.00, 2),
             (company_id, "Stripe Payouts", "CLIENT", 3, 100, 0.00, 1),
             (company_id, "Enterprise Retainer", "CLIENT", 2, 100, 0.00, 7)
