@@ -11,6 +11,7 @@ Tools:
     - get_obligation_details: Get obligation payment details
     - run_lp_optimization: Run the LP optimizer (read-only)
     - get_entity_tier: Get entity ontology tier classification
+    - generate_board_report: Generate an executive summary from dashboard and AI actions
 """
 
 from langchain_core.tools import tool
@@ -232,5 +233,24 @@ def get_entity_tier(entity_name: str) -> str:
         conn.close()
 
 
+@tool
+def generate_board_report(company_id: Optional[str] = None) -> str:
+    """Generate a professional board or investor update using Contract 2
+    (dashboard global state) and Contract 4 (recent AI actions)."""
+    from ai.board_report import generate_board_report_payload
+
+    try:
+        return json.dumps(generate_board_report_payload(company_id), default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # Export all tools as a list for agent binding
-ALL_TOOLS = [check_solvency, get_vendor_goodwill, get_obligation_details, run_lp_optimization, get_entity_tier]
+ALL_TOOLS = [
+    check_solvency,
+    get_vendor_goodwill,
+    get_obligation_details,
+    run_lp_optimization,
+    get_entity_tier,
+    generate_board_report,
+]

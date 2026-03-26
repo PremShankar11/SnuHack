@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useSimulation } from "./context/SimulationContext";
-import { TrendingDown, AlertTriangle, CheckCircle2, ChevronRight, Zap, Shield, Clock } from "lucide-react";
+import { mockState } from "./mockState";
+import { TrendingDown, AlertTriangle, CheckCircle2, ChevronRight, Zap, Shield, Clock, FileText } from "lucide-react";
 import Link from "next/link";
 import { ResponsiveContainer, AreaChart, Area, Tooltip, ReferenceLine, XAxis } from "recharts";
 
@@ -22,10 +23,42 @@ const tierStyle: Record<number, { bg: string; text: string; label: string }> = {
   3: { bg: "bg-emerald-100", text: "text-emerald-700", label: "Flexible" },
 };
 
+function buildDashboardFallback() {
+  return {
+    vitals: mockState.vitals,
+    sparkline: mockState.sparkline,
+    actions: mockState.actions.map((action) => ({
+      id: action.id,
+      title: action.title,
+      subtitle: action.subtitle,
+      priority: action.priority,
+    })),
+    optimization: {
+      status: "FALLBACK",
+      optimized_obligations: [],
+      chain_of_thought: [],
+    },
+  };
+}
+
+function buildMonteCarloFallback() {
+  return {
+    simulations: mockState.monteCarlo.simulations,
+    survival_probability: mockState.monteCarlo.probability,
+    p10_balance: mockState.monteCarlo.p10,
+    median_balance: mockState.monteCarlo.median,
+    p90_balance: mockState.monteCarlo.p90,
+  };
+}
+
 export default function DashboardPage() {
-  const { simulatedDate, refreshKey, isSimulating } = useSimulation();
+  const { simulatedDate, refreshKey } = useSimulation();
   const [data, setData] = useState<any>(null);
   const [monteCarlo, setMonteCarlo] = useState<any>(null);
+  const [boardReport, setBoardReport] = useState<any>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [usingFallbackData, setUsingFallbackData] = useState(false);
 
   useEffect(() => {
     async function fetchDashboard() {
@@ -34,10 +67,14 @@ export default function DashboardPage() {
         if (res.ok) {
           const json = await res.json();
           setData(json);
+          setUsingFallbackData(false);
+          return;
         }
-      } catch (err) {
-        console.error("Failed to fetch dashboard", err);
+      } catch {
       }
+
+      setData(buildDashboardFallback());
+      setUsingFallbackData(true);
     }
     
     async function fetchMonteCarlo() {
@@ -46,15 +83,42 @@ export default function DashboardPage() {
         if (res.ok) {
           const json = await res.json();
           setMonteCarlo(json);
+          return;
         }
-      } catch (err) {
-        console.error("Failed to fetch Monte Carlo", err);
+      } catch {
       }
+
+      setMonteCarlo(buildMonteCarloFallback());
     }
     
     fetchDashboard();
     fetchMonteCarlo();
   }, [refreshKey]);
+
+  async function generateBoardReport() {
+    setReportLoading(true);
+    setReportError(null);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/ai/generate-board-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.detail || "Failed to generate board report.");
+      }
+
+      setBoardReport(json);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate board report.";
+      setReportError(message);
+    } finally {
+      setReportLoading(false);
+    }
+  }
 
   if (!data) return <div className="p-8"><div className="shimmer h-40 rounded-2xl" /></div>;
 
@@ -80,6 +144,56 @@ export default function DashboardPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Executive Summary</h1>
         <p className="text-sm text-gray-400 mt-1">Real-time cash intelligence · Simulated as of {simulatedDate}</p>
+      </div>
+
+      {usingFallbackData && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Live backend data is unavailable, so this dashboard is currently showing demo fallback data.
+        </div>
+      )}
+
+      <div className="mb-8 rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6 text-white shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div className="max-w-2xl">
+            <div className="mb-3 flex items-center gap-2">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10">
+                <FileText size={16} className="text-emerald-300" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">One-Click Investor Update</p>
+                <p className="text-xs text-slate-300">Contract 2 dashboard state plus Contract 4 AI actions.</p>
+              </div>
+            </div>
+            <p className="text-sm leading-6 text-slate-200">
+              Generate a board-ready summary of runway, cash preservation, and recent autonomous actions for investors or partners.
+            </p>
+          </div>
+          <button
+            onClick={generateBoardReport}
+            disabled={reportLoading}
+            className="shrink-0 rounded-xl bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {reportLoading ? "Generating..." : boardReport ? "Refresh Report" : "Generate Report"}
+          </button>
+        </div>
+
+        {reportError && (
+          <div className="mt-4 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+            {reportError}
+          </div>
+        )}
+
+        {boardReport && (
+          <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-slate-300">
+              <span className="rounded-full border border-white/10 px-2.5 py-1">{boardReport.company_name}</span>
+              <span>Generated {new Date(boardReport.generated_at).toLocaleString()}</span>
+            </div>
+            <div className="whitespace-pre-wrap text-sm leading-7 text-slate-100">
+              {boardReport.report}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Vitals */}

@@ -49,6 +49,10 @@ class AutoGenerateRequest(BaseModel):
     generate_all: bool = False
 
 
+class BoardReportRequest(BaseModel):
+    company_id: Optional[str] = None
+
+
 # ── Helper ──────────────────────────────────────────────────────
 
 def _log_action_to_database(action: dict):
@@ -310,6 +314,19 @@ def get_pending_ai_actions():
         conn.close()
 
         return {"actions": formatted, "count": len(formatted)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/ai/generate-board-report")
+def generate_board_report(request: BoardReportRequest):
+    """Generate a one-click investor update from dashboard state + recent AI actions."""
+    try:
+        from ai.board_report import generate_board_report_payload
+
+        return generate_board_report_payload(request.company_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
